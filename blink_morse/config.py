@@ -53,8 +53,8 @@ DANGER = (251, 113, 133)
 ACTION_COLORS = {
     "dot": (103, 232, 249),       # right wink
     "dash": (167, 139, 250),      # both eyes
-    "letter": (251, 191, 36),     # short pause -> end of letter
-    "word": (74, 222, 128),       # long pause  -> space
+    "letter": (251, 191, 36),     # left wink  -> end of letter
+    "word": (74, 222, 128),       # long pause -> space
 }
 
 # ---------------------------------------------------------------------------
@@ -92,14 +92,13 @@ class EyeSettings:
     # Eye closure is a 0..1 score after removing the user's own resting
     # level. Above `close_threshold` an eye counts as closed.
     close_threshold: float = 0.45
-    # The right eye must be closed on its own this long to type a dot. It
+    # One eye must be closed on its own this long to count as a wink. It
     # only has to be long enough to rule out one eye leading a normal blink.
     wink_confirm: float = 0.05
     # Both eyes must stay closed this long to type a dash. 0 = instantly.
     blink_filter: float = 0.0
-    # Pause with the eyes open that ends a letter, and that ends a word.
-    letter_pause: float = 0.5
-    word_pause: float = 2.0
+    # Pause with the eyes open that ends the word with a space.
+    space_pause: float = 3.0
     swap_eyes: bool = False           # fixes cameras that mirror the image
 
 

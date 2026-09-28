@@ -1,8 +1,9 @@
 """
 Everything drawn on top of the camera image.
 
-Nothing is drawn on the face itself; all feedback lives in the panels
-around it. The HUD paints into two pygame surfaces every frame:
+Apart from two small readouts next to the eyes, nothing is drawn on the
+face; all other feedback lives in the panels around it. The HUD paints
+into two pygame surfaces every frame:
 
 * `ui`   - transparent layer with text, meters and icons.
 * `glow` - opaque black layer where bright shapes are added. The GPU
@@ -35,9 +36,12 @@ PUNCTUATION_HINT = ". , ? ! ' / ( ) : = + - @"
 # from getting dark fringes.
 UI_CLEAR = (232, 236, 244, 0)
 
-# The left eye has no action of its own, so its meter uses a neutral colour.
-LEFT_METER = (200, 208, 224)
-FLASH_TIME = 0.35          # how long a legend row stays lit after a symbol
+FLASH_TIME = 0.35          # how long a legend row stays lit after an action
+CHIP_SIZE = (66, 28)       # openness readout next to each eye
+CHIP_GAP = 12              # distance between the eye corner and the readout
+
+# Each eye is drawn in the colour of the action it triggers on its own.
+EYE_COLORS = {"right": ACTION_COLORS["dot"], "left": ACTION_COLORS["letter"]}
 
 
 @dataclass
@@ -47,15 +51,16 @@ class HudState:
     fps: float = 0.0
     camera_error: Optional[str] = None
     face: bool = False                   # a face is being tracked
-    closure: dict = field(default_factory=lambda: {"left": 0.0, "right": 0.0})
-    threshold: float = 0.45
+    # 0 = shut, 1 = fully open, after removing the user's resting level
+    openness: dict = field(default_factory=lambda: {"left": 1.0, "right": 1.0})
+    # Screen position of the readout next to each eye, or None
+    chips: dict = field(default_factory=dict)
+    open_threshold: float = 0.55         # below this an eye counts as closed
     pose: str = "open"                   # open / left / right / both
     paused: bool = False                 # input ignored until P is pressed
-    pause_kind: Optional[str] = None     # "letter", "space" or None
-    pause_progress: float = 0.0          # 0..1 towards `pause_kind`
-    pause_left: float = 0.0              # seconds until it happens
-    letter_pause: float = 0.5
-    word_pause: float = 2.0
+    space_progress: float = -1.0         # 0..1 towards the space, -1 if none
+    space_left: float = 0.0              # seconds until the space
+    space_pause: float = 3.0
     code: str = ""
     text: str = ""
     muted: bool = False
@@ -142,8 +147,10 @@ class Hud:
 
     def on_letter(self, char: str, now: float) -> None:
         self._pops.append((char, TEXT, now, 140))
-        self._flash["letter"] = now
         self._bottom_flash = (now, ACTION_COLORS["letter"])
+
+    def on_end_wink(self, now: float) -> None:
+        self._flash["letter"] = now
 
     def on_space(self, now: float) -> None:
         self._pops.append(("space", ACTION_COLORS["word"], now, 40))
@@ -166,6 +173,7 @@ class Hud:
         self.ui.fill(UI_CLEAR)
         self.glow.fill((0, 0, 0))
         self._build_panels(state, now)
+        self._draw_eye_chips(state)
 
         self._draw_title(state)
         self._draw_legend(state, now)
@@ -192,6 +200,24 @@ class Hud:
             self.panels.append(Panel(self.rect_chart))
         if state.camera_error:
             self.panels.append(Panel(self.rect_error, 0.6, DANGER))
+        # Glass readouts next to the eyes; the border lights up while the
+        # eye is closed, in the colour of the action it is about to trigger.
+        for side, rect in self._chip_rects(state).items():
+            closed = state.openness[side] < state.open_threshold
+            color = ACTION_COLORS["dash"] if state.pose == "both" else EYE_COLORS[side]
+            self.panels.append(Panel(rect, 0.9 if closed else 0.0, color))
+
+    def _chip_rects(self, state: HudState) -> dict:
+        if not state.face:
+            return {}
+        rects = {}
+        for side, centre in state.chips.items():
+            if centre is None:
+                continue
+            rect = pygame.Rect((0, 0), CHIP_SIZE)
+            rect.center = (round(centre[0]), round(centre[1]))
+            rects[side] = rect
+        return rects
 
     # ------------------------------------------------------------------------
     # Text helpers
@@ -234,6 +260,21 @@ class Hud:
     # Panels
     # ------------------------------------------------------------------------
 
+    def _draw_eye_chips(self, state: HudState) -> None:
+        """Openness of each eye, as a percentage, beside the eye itself."""
+        for side, rect in self._chip_rects(state).items():
+            value = state.openness[side]
+            closed = value < state.open_threshold
+            color = ACTION_COLORS["dash"] if state.pose == "both" else EYE_COLORS[side]
+
+            dot = (rect.x + 13, rect.centery)
+            draw.circle(self.ui, color, dot, 3.5)
+            if closed:
+                draw.glow(self.glow, color, dot, 14, 0.8)
+            label = self.text("mono", 13, f"{round(value * 100):3d}%",
+                              color if closed else TEXT)
+            self.blit(label, (rect.right - 10, rect.centery), "midright")
+
     def _draw_title(self, state: HudState) -> None:
         r = self.rect_title
         self.blit(self.text("semibold", 17, "Blink Morse", TEXT), (r.x + 16, r.y + 10))
@@ -257,8 +298,8 @@ class Hud:
         return [
             ("dot", "Right wink", "dot  \u00b7"),
             ("dash", "Blink both", "dash  \u2013"),
-            ("letter", f"Pause {state.letter_pause:g} s", "end letter"),
-            ("word", f"Pause {state.word_pause:g} s", "space"),
+            ("letter", "Left wink", "end letter"),
+            ("word", f"Pause {state.space_pause:g} s", "space"),
         ]
 
     def _draw_legend(self, state: HudState, now: float) -> None:
@@ -270,10 +311,8 @@ class Hud:
             # A row lights up briefly when its action fires, and the pause
             # rows stay lit while the pause is counting towards them.
             lit = max(0.0, 1.0 - (now - self._flash.get(key, -10.0)) / FLASH_TIME)
-            counting = state.pause_progress > 0 and (
-                state.pause_kind == key or (state.pause_kind == "space" and key == "word"))
-            if counting:
-                lit = max(lit, 0.6)
+            if key == "word" and state.space_progress > 0:
+                lit = max(lit, 0.6 * state.space_progress)
             if lit > 0:
                 pill = pygame.Rect(r.x + 8, cy - 12, r.w - 16, 24)
                 draw.rounded_rect(self.ui, draw.with_alpha(color, 0.18 * lit), pill, 8)
@@ -285,19 +324,16 @@ class Hud:
                       (r.right - 14, cy), "midright")
 
     def _draw_meters(self, state: HudState) -> None:
-        """Two bars showing how closed each eye is, with the threshold marked."""
+        """Two bars showing how open each eye is, with the threshold marked."""
         r = self.rect_meters
-        self.blit(self.label("Eye closure"), (r.x + 16, r.y + 12))
+        self.blit(self.label("Eye openness"), (r.x + 16, r.y + 12))
         x0, x1 = r.x + 62, r.right - 62
         both = state.pose == "both"
-        for i, side in enumerate(("left", "right")):
+        for i, side in enumerate(("right", "left")):
             cy = r.y + 40 + i * 24
-            if both:
-                color = ACTION_COLORS["dash"]
-            else:
-                color = ACTION_COLORS["dot"] if side == "right" else LEFT_METER
-            value = state.closure.get(side, 0.0) if state.face else 0.0
-            closed = value > state.threshold
+            color = ACTION_COLORS["dash"] if both else EYE_COLORS[side]
+            value = state.openness.get(side, 1.0) if state.face else 0.0
+            closed = state.face and value < state.open_threshold
 
             self.blit(self.text("medium", 12, side.capitalize(), TEXT),
                       (r.x + 16, cy), "midleft")
@@ -305,14 +341,14 @@ class Hud:
             draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 3)
             fill = track.copy()
             fill.w = max(6, round(track.w * value))
-            draw.rounded_rect(self.ui, draw.with_alpha(color, 1.0 if closed else 0.7), fill, 3)
+            draw.rounded_rect(self.ui, draw.with_alpha(color, 0.75), fill, 3)
             if closed:
-                draw.glow(self.glow, color, fill.midright, 16, 0.7)
+                draw.glow(self.glow, color, (x0 + 4, cy), 16, 0.7)
 
-            tx = x0 + track.w * state.threshold
+            tx = x0 + track.w * state.open_threshold
             draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
 
-            status = "closed" if closed else "open"
+            status = "closed" if closed else f"{round(value * 100)}%"
             self.blit(self.text("regular", 11, status, color if closed else TEXT_MUTED),
                       (r.right - 14, cy), "midright")
 
@@ -411,12 +447,12 @@ class Hud:
         if state.code:
             self._draw_code(state.code, x0 + shake, cy, now)
             self._draw_prediction(state, r.right - 20, cy)
-        elif state.pause_kind == "space":
+        elif state.space_progress >= 0:
             color = ACTION_COLORS["word"]
             draw.ring(self.ui, (255, 255, 255, 40), (x0 + 9, cy), 8, 2)
             draw.arc(self.ui, color, (x0 + 9, cy), 8, 0,
-                     2 * math.pi * state.pause_progress, 2.5)
-            self.blit(self.text("medium", 14, f"Space in {state.pause_left:.1f} s", color),
+                     2 * math.pi * state.space_progress, 2.5)
+            self.blit(self.text("medium", 14, f"Space in {state.space_left:.1f} s", color),
                       (x0 + 28, cy), "midleft")
             self.blit(self.text("regular", 12, "or keep typing the same word",
                                 TEXT_FAINT), (x0 + 150, cy), "midleft")
@@ -435,7 +471,8 @@ class Hud:
         # Row 3: the decoded message with a blinking caret
         self.blit(self.label("Message"), (x0, r.y + 96))
         if state.text:
-            count = self.text("regular", 11, f"{len(state.text)} chars", TEXT_FAINT)
+            n = len(state.text)
+            count = self.text("regular", 11, f"{n} char" + ("" if n == 1 else "s"), TEXT_FAINT)
             self.blit(count, (r.right - 20, r.y + 95), "topright")
 
         font = self.fonts.get("medium", 26)
@@ -488,18 +525,16 @@ class Hud:
             x += width
 
     def _draw_prediction(self, state: HudState, right: float, cy: float) -> None:
-        """Countdown ring with the letter that the pause will commit."""
+        """The letter a left wink would confirm, inside a small ring."""
         code = state.code
         color = ACTION_COLORS["letter"]
         centre = (right - 22, cy)
-        draw.ring(self.ui, (255, 255, 255, 40), centre, 21, 3)
-        draw.arc(self.ui, color, centre, 21, 0, 2 * math.pi * state.pause_progress, 3.5)
-        if state.pause_progress > 0:
-            draw.glow(self.glow, color, centre, 26, 0.35 * state.pause_progress)
-
         char = decode(code)
         options = candidates(code)
+
+        draw.ring(self.ui, draw.with_alpha(color, 0.9 if char else 0.35), centre, 21, 2)
         if char is not None:
+            draw.glow(self.glow, color, centre, 24, 0.3)
             glyph = self.text("display", 22, char, TEXT)
         elif options:
             glyph = self.text("display", 18, "\u2026", TEXT_MUTED)
@@ -509,7 +544,7 @@ class Hud:
 
         left = right - 56
         if char is not None:
-            self.blit(self.text("regular", 12, "pause to confirm", TEXT_MUTED),
+            self.blit(self.text("regular", 12, "wink left to confirm", TEXT_MUTED),
                       (left, cy), "midright")
         elif options:
             preview = "  ".join(options[:6]) + ("  \u2026" if len(options) > 6 else "")

@@ -41,9 +41,15 @@ class BlinkDetectorTest(unittest.TestCase):
         self.assertEqual(kinds(events), [BlinkKind.DOT])
         self.assertLess(events[0].fired - events[0].started, 0.1)
 
-    def test_left_wink_types_nothing(self):
+    def test_left_wink_ends_the_letter(self):
         events, _ = play(self.d, [(0.3, SHUT, OPEN), (0.3, OPEN, OPEN)], self.t)
-        self.assertEqual(events, [])
+        self.assertEqual(kinds(events), [BlinkKind.END])
+        self.assertLess(events[0].fired - events[0].started, 0.1)
+
+    def test_blink_led_by_left_eye_is_still_a_dash(self):
+        script = [(1 / FPS, SHUT, OPEN), (0.12, SHUT, SHUT), (0.3, OPEN, OPEN)]
+        events, _ = play(self.d, script, self.t)
+        self.assertEqual(kinds(events), [BlinkKind.DASH])
 
     def test_blink_led_by_right_eye_is_still_a_dash(self):
         # The right eye closes one frame before the left one.
@@ -73,11 +79,13 @@ class BlinkDetectorTest(unittest.TestCase):
         self.assertEqual(kinds(events), [BlinkKind.DASH])
 
     def test_fast_sequence(self):
-        script = [(0.1, OPEN, SHUT), (0.15, OPEN, OPEN),
-                  (0.1, SHUT, SHUT), (0.15, OPEN, OPEN),
-                  (0.1, OPEN, SHUT), (0.3, OPEN, OPEN)]
+        script = [(0.1, OPEN, SHUT), (0.15, OPEN, OPEN),     # dot
+                  (0.1, SHUT, SHUT), (0.15, OPEN, OPEN),     # dash
+                  (0.1, OPEN, SHUT), (0.15, OPEN, OPEN),     # dot
+                  (0.1, SHUT, OPEN), (0.3, OPEN, OPEN)]      # end of letter
         events, _ = play(self.d, script, self.t)
-        self.assertEqual(kinds(events), [BlinkKind.DOT, BlinkKind.DASH, BlinkKind.DOT])
+        self.assertEqual(kinds(events), [BlinkKind.DOT, BlinkKind.DASH,
+                                         BlinkKind.DOT, BlinkKind.END])
 
     def test_blink_filter_ignores_very_short_blinks(self):
         self.d.blink_filter = 0.1
@@ -110,6 +118,13 @@ class EyeMappingTest(unittest.TestCase):
     def test_mirrored_frame_swaps_sides(self):
         r = build_result(mp_left=0.9, mp_right=0.1, mirrored=True)
         self.assertEqual((r.left_score, r.right_score), (0.1, 0.9))
+
+    def test_corners_follow_the_scores(self):
+        mp_left_corners, mp_right_corners = ("L", "l"), ("R", "r")
+        r = build_result(0.9, 0.1, mirrored=True,
+                         corners=(mp_left_corners, mp_right_corners))
+        self.assertEqual(r.left_corners, mp_right_corners)
+        self.assertEqual(r.right_corners, mp_left_corners)
 
     def test_plain_frame_keeps_sides(self):
         r = build_result(mp_left=0.9, mp_right=0.1, mirrored=False)

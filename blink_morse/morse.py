@@ -67,23 +67,18 @@ class ComposerEvent:
 
 class MorseComposer:
     """
-    Builds a message from Morse input, using pauses as separators.
+    Builds a message from Morse input.
 
-    Classic Morse separates letters and words with silence, and so does this
-    class. The caller reports how long the input has been idle through
-    `update(pause)`:
+    * `add_symbol` appends a dot or dash to the letter in progress.
+    * `end_letter` looks the letter up and adds it to the text.
+    * `update(pause)` is called every frame with the time the input has
+      been idle. After `word_gap` seconds the word ends: a letter still in
+      progress is finished first, then a space is added.
 
-    * idle for `letter_gap` seconds with symbols pending -> the letter ends
-    * idle for `word_gap` seconds after a letter          -> a space is added
-
-    Both gaps are measured from the same moment (the end of the last
-    symbol), so with the defaults the letter appears after 0.5 s and the
-    space after 2 s. Starting a new symbol in between keeps the word going.
+    Starting a new symbol before `word_gap` keeps the same word going.
     """
 
-    def __init__(self, letter_gap: float = 0.5, word_gap: float = 2.0,
-                 max_text: int = 200):
-        self.letter_gap = letter_gap
+    def __init__(self, word_gap: float = 3.0, max_text: int = 200):
         self.word_gap = word_gap
         self.max_text = max_text
         self.code = ""                     # symbols of the letter in progress
@@ -109,32 +104,38 @@ class MorseComposer:
         self.code += symbol
         return ComposerEvent(EventKind.SYMBOL, symbol)
 
+    def end_letter(self) -> Optional[ComposerEvent]:
+        """Finish the letter in progress. Does nothing if no symbol is pending."""
+        if not self.code:
+            return None
+        event = self._commit()
+        self._space_pending = event.kind == EventKind.LETTER
+        return event
+
     # -- pauses ----------------------------------------------------------------
 
-    def update(self, pause: float) -> Optional[ComposerEvent]:
+    def update(self, pause: float) -> list:
         """
         Call every frame with the number of seconds the input has been idle.
-        Returns the letter or space that the pause produced, if any.
+        Returns the events (letter, space) that the pause produced.
         """
-        if self.code and pause >= self.letter_gap:
-            event = self._commit()
-            self._space_pending = event.kind == EventKind.LETTER
-            return event
-        if self._space_pending and pause >= self.word_gap:
-            self._space_pending = False
-            return self._insert_space()
-        return None
-
-    def pause_state(self, pause: float) -> tuple:
-        """
-        What the current pause is counting towards, for the HUD:
-        ("letter", progress 0..1), ("space", progress 0..1) or (None, 0).
-        """
+        if pause < self.word_gap:
+            return []
+        events = []
         if self.code:
-            return "letter", min(1.0, pause / self.letter_gap)
+            events.append(self.end_letter())
         if self._space_pending:
-            return "space", min(1.0, pause / self.word_gap)
-        return None, 0.0
+            self._space_pending = False
+            space = self._insert_space()
+            if space is not None:
+                events.append(space)
+        return events
+
+    def space_progress(self, pause: float) -> float:
+        """0..1 progress of the pause towards a space, or -1 if none is due."""
+        if not (self.code or self._space_pending):
+            return -1.0
+        return min(1.0, pause / self.word_gap)
 
     # -- delete and clear ------------------------------------------------------
 

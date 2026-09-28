@@ -193,10 +193,8 @@ class SettingsWindow:
                        eyes["wink_confirm"], 0.02, 0.15, 0.01, "{:.2f} s"),
                 Slider("Blink filter", "eyes", "blink_filter",
                        eyes["blink_filter"], 0.0, 0.20, 0.01, "{:.2f} s"),
-                Slider("Letter pause", "eyes", "letter_pause",
-                       eyes["letter_pause"], 0.2, 1.5, 0.05, "{:.2f} s"),
-                Slider("Word pause", "eyes", "word_pause",
-                       eyes["word_pause"], 1.0, 4.0, 0.1, "{:.1f} s"),
+                Slider("Space pause", "eyes", "space_pause",
+                       eyes["space_pause"], 1.0, 6.0, 0.1, "{:.1f} s"),
                 Toggle("Swap left / right eye", "eyes", "swap_eyes", eyes["swap_eyes"]),
             ]),
         }

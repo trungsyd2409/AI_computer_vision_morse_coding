@@ -4,8 +4,9 @@ Application loop: camera -> face tracking -> blinks -> Morse -> screen.
 Per frame:
   1. Take the newest camera frame (the camera runs in its own thread).
   2. Mirror it and run MediaPipe to get the two eye blink scores.
-  3. Feed the scores to the blink detector, which types dots and dashes.
-  4. Let the Morse composer turn pauses into letters and spaces.
+  3. Feed the scores to the blink detector: right wink = dot, both eyes =
+     dash, left wink = end of letter.
+  4. Let the Morse composer turn a long pause into a space.
   5. Draw the HUD and let the GPU compose the final image.
 
 Latency matters more than anything else here, so the symbol is typed and
@@ -23,10 +24,10 @@ import pygame
 from .audio import SoundBank
 from .blinks import BlinkDetector, BlinkKind
 from .camera import CameraStream
-from .compositor import Compositor
+from .compositor import Compositor, cover_crop
 from .config import APP_TITLE, WINDOW_SIZE, AppSettings, CameraSettings, EyeSettings
 from .face_tracker import FaceTracker
-from .hud import Hud, HudState
+from .hud import CHIP_SIZE, CHIP_GAP, Hud, HudState
 from .morse import EventKind, MorseComposer
 from .settings_window import SettingsLink
 
@@ -63,7 +64,7 @@ class BlinkMorseApp:
 
         e = self.settings.eyes
         self.detector = BlinkDetector(e.close_threshold, e.wink_confirm, e.blink_filter)
-        self.composer = MorseComposer(e.letter_pause, e.word_pause)
+        self.composer = MorseComposer(e.space_pause)
         self.settings_link = SettingsLink()
 
         self.paused = False               # P stops typing, e.g. to rest the eyes
@@ -74,6 +75,7 @@ class BlinkMorseApp:
         self._last_stats = 0.0
         self._props_sent = False
         self._state = HudState()
+        self._chip_pos = {"left": None, "right": None}
 
     # ------------------------------------------------------------------------
 
@@ -160,23 +162,63 @@ class BlinkMorseApp:
             self.detector.reset()
             state.face = False
             state.pose = "open"
+            self._chip_pos = {"left": None, "right": None}
         else:
             for event in self.detector.update(face.left_score, face.right_score, now):
                 if not self.paused:
-                    symbol = "." if event.kind == BlinkKind.DOT else "-"
-                    self._apply_composer(self.composer.add_symbol(symbol), now)
+                    self._handle_blink(event, now)
             state.face = True
-            state.closure = {"left": self.detector.left.value,
-                             "right": self.detector.right.value}
+            state.openness = {"left": 1.0 - self.detector.left.value,
+                              "right": 1.0 - self.detector.right.value}
             state.pose = self.detector.pose
+            self._update_chip_positions(face, frame_rgb.shape)
 
-        # Pauses end letters and words. Without a face the eyes cannot be
+        # A long pause ends the word. Without a face the eyes cannot be
         # blinking, so the time since the last blink keeps counting.
-        self._apply_composer(self.composer.update(self._pause_time(now)), now)
+        for event in self.composer.update(self.detector.pause_time(now)):
+            self._apply_composer(event, now)
         self.compositor.update_camera(frame_rgb)
 
-    def _pause_time(self, now: float) -> float:
-        return self.detector.pause_time(now)
+    def _handle_blink(self, event, now: float) -> None:
+        if event.kind == BlinkKind.DOT:
+            self._apply_composer(self.composer.add_symbol("."), now)
+        elif event.kind == BlinkKind.DASH:
+            self._apply_composer(self.composer.add_symbol("-"), now)
+        elif event.kind == BlinkKind.END:
+            self.hud.on_end_wink(now)
+            self._apply_composer(self.composer.end_letter(), now)
+
+    def _update_chip_positions(self, face, shape) -> None:
+        """
+        Place each openness readout just outside the eye's outer corner,
+        in window pixels. The position is lightly smoothed so the numbers
+        do not jitter with the landmarks; this has no effect on input.
+        """
+        h, w = shape[:2]
+        (sx, sy), (ox, oy) = cover_crop((w, h), WINDOW_SIZE)
+        W, H = WINDOW_SIZE
+
+        def to_screen(p):
+            return np.array([(p[0] - ox) / sx * W, (p[1] - oy) / sy * H])
+
+        offset = CHIP_GAP + CHIP_SIZE[0] / 2
+        for side, corners in (("left", face.left_corners),
+                              ("right", face.right_corners)):
+            if corners is None:
+                self._chip_pos[side] = None
+                continue
+            outer, inner = to_screen(corners[0]), to_screen(corners[1])
+            direction = outer - inner
+            norm = np.linalg.norm(direction)
+            if norm < 1e-3:
+                continue
+            direction /= norm
+            target = outer + direction * offset
+            target[1] = (outer[1] + inner[1]) / 2
+            previous = self._chip_pos[side]
+            if previous is not None:
+                target = previous * 0.5 + target * 0.5
+            self._chip_pos[side] = target
 
     def _apply_composer(self, event, now: float) -> None:
         if event is None:
@@ -240,8 +282,7 @@ class BlinkMorseApp:
         self.detector.close_threshold = e.close_threshold
         self.detector.wink_confirm = e.wink_confirm
         self.detector.blink_filter = e.blink_filter
-        self.composer.letter_gap = e.letter_pause
-        self.composer.word_gap = e.word_pause
+        self.composer.word_gap = e.space_pause
 
     def _reset_settings(self) -> None:
         index = self.settings.camera.index
@@ -280,19 +321,17 @@ class BlinkMorseApp:
         e = self.settings.eyes
         state.fps = self.fps
         state.camera_error = self.camera.error
-        state.threshold = e.close_threshold
-        state.letter_pause = e.letter_pause
-        state.word_pause = e.word_pause
+        state.open_threshold = 1.0 - e.close_threshold
+        state.space_pause = e.space_pause
         state.code = self.composer.code
         state.text = self.composer.text
         state.paused = self.paused
+        state.chips = {side: (None if p is None else (float(p[0]), float(p[1])))
+                       for side, p in self._chip_pos.items()}
 
-        pause = self._pause_time(now)
-        kind, progress = self.composer.pause_state(pause)
-        state.pause_kind = kind
-        state.pause_progress = progress
-        target = e.letter_pause if kind == "letter" else e.word_pause
-        state.pause_left = max(0.0, target - pause)
+        pause = self.detector.pause_time(now)
+        state.space_progress = self.composer.space_progress(pause)
+        state.space_left = max(0.0, e.space_pause - pause)
         state.muted = not self.sounds.enabled
         state.show_chart = self.show_chart
 

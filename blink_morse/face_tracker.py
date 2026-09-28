@@ -4,7 +4,8 @@ Wrapper around MediaPipe's Face Landmarker (Tasks API).
 For every frame MediaPipe returns 478 face landmarks and 52 "blendshape"
 scores that describe the expression. Two of those scores, `eyeBlinkLeft`
 and `eyeBlinkRight`, go from about 0 (eye open) to about 1 (eye closed)
-and are the only signal this app needs.
+and drive the whole app. Four landmarks, the corners of each eye, are also
+returned so the HUD can place the openness readout next to each eye.
 
 Which eye is "left"
 -------------------
@@ -24,6 +25,10 @@ import numpy as np
 
 from .config import FACE_MODEL_PATH, FACE_MODEL_URL
 
+# Eye corners (outer, inner), named after the face as shown in the image.
+MP_RIGHT_EYE_CORNERS = (33, 133)
+MP_LEFT_EYE_CORNERS = (263, 362)
+
 
 def ensure_model(path: Path = FACE_MODEL_PATH, url: str = FACE_MODEL_URL) -> Path:
     """Download the face landmark model (about 3.7 MB) if it is missing."""
@@ -39,10 +44,13 @@ def ensure_model(path: Path = FACE_MODEL_PATH, url: str = FACE_MODEL_URL) -> Pat
 
 @dataclass
 class FaceResult:
-    """Blink scores of one detected face, from the user's point of view."""
+    """One detected face, from the user's point of view."""
 
     left_score: float            # raw blink score of the user's left eye
     right_score: float           # raw blink score of the user's right eye
+    # (outer corner, inner corner) of each eye as normalised (x, y) pairs
+    left_corners: Optional[tuple] = None
+    right_corners: Optional[tuple] = None
 
 
 class FaceTracker:
@@ -84,19 +92,30 @@ class FaceTracker:
             return None
 
         scores = {c.category_name: c.score for c in result.face_blendshapes[0]}
+        corners = None
+        if result.face_landmarks:
+            lm = result.face_landmarks[0]
+
+            def pair(ids):
+                return tuple((lm[i].x, lm[i].y) for i in ids)
+
+            corners = (pair(MP_LEFT_EYE_CORNERS), pair(MP_RIGHT_EYE_CORNERS))
         return build_result(scores.get("eyeBlinkLeft", 0.0),
-                            scores.get("eyeBlinkRight", 0.0), mirrored, swap_eyes)
+                            scores.get("eyeBlinkRight", 0.0), mirrored, swap_eyes,
+                            corners)
 
     def close(self) -> None:
         self._landmarker.close()
 
 
 def build_result(mp_left: float, mp_right: float, mirrored: bool,
-                 swap_eyes: bool = False) -> FaceResult:
+                 swap_eyes: bool = False, corners: Optional[tuple] = None) -> FaceResult:
     """
     Map MediaPipe's image-face naming onto the user's own eyes.
+    `corners` is (MediaPipe left eye corners, MediaPipe right eye corners).
     Kept separate from the tracker so it can be unit tested.
     """
+    mp_left_corners, mp_right_corners = corners if corners else (None, None)
     # In a mirrored frame the depicted face is flipped, so MediaPipe's
     # "left" is the user's right.
     user_left_is_mp_left = not mirrored
@@ -104,5 +123,5 @@ def build_result(mp_left: float, mp_right: float, mirrored: bool,
         user_left_is_mp_left = not user_left_is_mp_left
 
     if user_left_is_mp_left:
-        return FaceResult(mp_left, mp_right)
-    return FaceResult(mp_right, mp_left)
+        return FaceResult(mp_left, mp_right, mp_left_corners, mp_right_corners)
+    return FaceResult(mp_right, mp_left, mp_right_corners, mp_left_corners)

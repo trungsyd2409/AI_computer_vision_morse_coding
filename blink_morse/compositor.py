@@ -16,7 +16,7 @@ import moderngl
 import numpy as np
 import pygame
 
-MAX_PANELS = 8
+MAX_PANELS = 10
 
 VERTEX_SHADER = """
 #version 330
@@ -41,8 +41,8 @@ uniform float u_cam_ready;       // 0 while no frame has arrived yet
 uniform float u_time;
 
 uniform int   u_panel_count;
-uniform vec4  u_panels[8];       // x, y, width, height in pixels
-uniform vec4  u_panel_accent[8]; // rgb colour, a = strength
+uniform vec4  u_panels[10];       // x, y, width, height in pixels
+uniform vec4  u_panel_accent[10]; // rgb colour, a = strength
 uniform float u_radius;
 
 in vec2 v_uv;

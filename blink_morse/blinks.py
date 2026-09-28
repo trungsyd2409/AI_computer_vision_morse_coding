@@ -1,5 +1,5 @@
 """
-Turns two eye-closure scores per frame into Morse symbols, as fast as the
+Turns two eye-closure scores per frame into Morse input, as fast as the
 camera allows.
 
 Signals
@@ -13,22 +13,24 @@ means "this person's open eye" again.
 Episodes
 --------
 Everything between the moment any eye closes and the moment both eyes are
-open again is one "episode", and each episode types at most one symbol:
+open again is one "episode", and each episode produces at most one event:
 
 * Both eyes closed  -> DASH, on the very first frame they are both shut
                        (optionally after `blink_filter` seconds).
 * Right eye closed, left eye clearly open for `wink_confirm` seconds
                     -> DOT.
+* Left eye closed, right eye clearly open for `wink_confirm` seconds
+                    -> END (end of the current letter).
 
-The short confirmation for the dot is needed because a normal blink does
+The short confirmation for a wink is needed because a normal blink does
 not close both eyes on exactly the same frame. For a frame or two one eye
 can look closed on its own. Waiting ~50 ms (two to three frames) is enough
 to tell "one eye leading a blink" from "a real wink", and is too short to
-feel like a delay. A left wink does nothing.
+feel like a delay.
 
-The detector does not decide when a letter or word ends. It only reports
-how long the eyes have been open (`pause_time`), and the Morse composer
-turns long enough pauses into "end of letter" and "space".
+The detector does not decide when a word ends. It only reports how long
+the eyes have been open (`pause_time`), and the Morse composer turns a long
+enough pause into a space.
 """
 
 import math
@@ -38,15 +40,16 @@ from typing import Optional
 
 
 class BlinkKind(Enum):
-    DOT = auto()
-    DASH = auto()
+    DOT = auto()          # right wink
+    DASH = auto()         # both eyes
+    END = auto()          # left wink: end of letter
 
 
 @dataclass
 class BlinkEvent:
     kind: BlinkKind
     started: float = 0.0  # when the eye(s) closed
-    fired: float = 0.0    # when the symbol was typed
+    fired: float = 0.0    # when the event was produced
 
 
 class EyeSignal:
@@ -86,11 +89,11 @@ class BlinkDetector:
     # the user is winking and the other eye is only squinting along with it.
     WINK_DIFFERENCE = 0.28
     RELEASE_GAP = 0.15    # hysteresis between the close and open thresholds
-    # For a dot the left eye must be below this fraction of the threshold,
-    # so a left eye that is already on its way down is not mistaken for open.
+    # For a wink the other eye must be below this fraction of the threshold,
+    # so an eye that is already on its way down is not mistaken for open.
     OPEN_FRACTION = 0.6
-    # A wink with a squinting left eye still counts once it lasts this many
-    # times the normal confirmation time.
+    # A wink with the other eye squinting still counts once it lasts this
+    # many times the normal confirmation time.
     SQUINT_FACTOR = 3.0
     # Both eyes must look open on this many frames in a row before an
     # episode ends, so one noisy frame cannot split a blink into two.
@@ -140,7 +143,7 @@ class BlinkDetector:
     # ------------------------------------------------------------------------
 
     def update(self, left_raw: float, right_raw: float, now: float) -> list:
-        """Feed one frame of raw blink scores; returns the symbols it typed."""
+        """Feed one frame of raw blink scores; returns the events it caused."""
         nl = self.left.update(left_raw, now, self.left_closed)
         nr = self.right.update(right_raw, now, self.right_closed)
         self.left_closed = self._hysteresis(nl, self.left_closed)
@@ -169,11 +172,11 @@ class BlinkDetector:
 
         if self._consumed:
             return []
-        return self._decide(pose, nl, now)
+        return self._decide(pose, nl, nr, now)
 
     # ------------------------------------------------------------------------
 
-    def _decide(self, pose: str, nl: float, now: float) -> list:
+    def _decide(self, pose: str, nl: float, nr: float, now: float) -> list:
         run = now - self._run_start
 
         if pose == "both":
@@ -182,18 +185,20 @@ class BlinkDetector:
                 return [BlinkEvent(BlinkKind.DASH, self._run_start, now)]
             return []
 
-        confirmed = run >= self.wink_confirm and self._run_frames >= 2
-        if pose == "right" and confirmed:
-            left_open = nl < self.close_threshold * self.OPEN_FRACTION
-            long_enough = run >= self.wink_confirm * self.SQUINT_FACTOR
-            if left_open or long_enough:
-                self._consumed = True
-                return [BlinkEvent(BlinkKind.DOT, self._run_start, now)]
-        elif pose == "left" and confirmed:
-            # A left wink types nothing, but it must not turn into a dash if
-            # the right eye closes a moment later.
-            self._consumed = True
-        return []
+        if run < self.wink_confirm or self._run_frames < 2:
+            return []
+
+        # The eye that is not winking must be clearly open, or the wink
+        # must have lasted long enough that it cannot be a blink.
+        other = nl if pose == "right" else nr
+        other_open = other < self.close_threshold * self.OPEN_FRACTION
+        long_enough = run >= self.wink_confirm * self.SQUINT_FACTOR
+        if not (other_open or long_enough):
+            return []
+
+        self._consumed = True
+        kind = BlinkKind.DOT if pose == "right" else BlinkKind.END
+        return [BlinkEvent(kind, self._run_start, now)]
 
     def _update_open(self, now: float) -> list:
         if self._open_frames == 0:
