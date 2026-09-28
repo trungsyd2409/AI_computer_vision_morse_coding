@@ -1,9 +1,9 @@
-"""Tests for the Morse table and the composer state machine."""
+"""Tests for the Morse table and the pause-driven composer."""
 
 import unittest
 
-from morse_hand.morse import (MORSE_TABLE, EventKind, MorseComposer, candidates,
-                              decode)
+from blink_morse.morse import (MORSE_TABLE, EventKind, MorseComposer, candidates,
+                               decode)
 
 
 class MorseTableTest(unittest.TestCase):
@@ -21,57 +21,66 @@ class MorseTableTest(unittest.TestCase):
         self.assertEqual(candidates(""), [])
 
 
+def pause(composer, seconds, step=1 / 30):
+    """Simulate `seconds` of idle time; return the events it produced."""
+    events, t = [], 0.0
+    while t <= seconds + 1e-9:
+        e = composer.update(t)
+        if e is not None:
+            events.append(e)
+        t += step
+    return events
+
+
 class ComposerTest(unittest.TestCase):
-    def type_letter(self, composer, code, now):
+    def type_code(self, composer, code):
         for symbol in code:
             composer.add_symbol(symbol)
-        return composer.ring_tap(now)
 
-    def test_single_ring_commits_letter(self):
+    def test_short_pause_does_nothing(self):
         c = MorseComposer()
-        event = self.type_letter(c, "....", 1.0)
-        self.assertEqual(event.kind, EventKind.LETTER)
+        self.type_code(c, "..")
+        self.assertEqual(pause(c, 0.3), [])
+        self.assertEqual(c.code, "..")
+
+    def test_letter_pause_commits_letter(self):
+        c = MorseComposer()
+        self.type_code(c, "....")
+        events = pause(c, 0.6)
+        self.assertEqual([e.kind for e in events], [EventKind.LETTER])
         self.assertEqual(c.text, "H")
-        self.assertEqual(c.code, "")
 
-    def test_double_ring_adds_space(self):
-        c = MorseComposer(double_tap_window=0.4)
-        self.type_letter(c, "..", 1.0)
-        event = c.ring_tap(1.3)
-        self.assertEqual(event.kind, EventKind.SPACE)
+    def test_word_pause_adds_space_once(self):
+        c = MorseComposer()
+        self.type_code(c, "..")
+        events = pause(c, 3.0)
+        self.assertEqual([e.kind for e in events], [EventKind.LETTER, EventKind.SPACE])
         self.assertEqual(c.text, "I ")
+        self.assertEqual(pause(c, 5.0), [])          # no second space
 
-    def test_slow_second_ring_is_not_space(self):
-        c = MorseComposer(double_tap_window=0.4)
-        self.type_letter(c, "..", 1.0)
-        event = c.ring_tap(2.0)
-        self.assertEqual(event.kind, EventKind.ARMED)
-        self.assertEqual(c.text, "I")
-
-    def test_symbol_between_rings_cancels_space(self):
-        c = MorseComposer(double_tap_window=0.4)
-        self.type_letter(c, "..", 1.0)
-        c.add_symbol(".")
-        event = c.ring_tap(1.2)
-        self.assertEqual(event.kind, EventKind.LETTER)
-        self.assertEqual(c.text, "IE")
+    def test_typing_before_word_pause_keeps_the_word(self):
+        c = MorseComposer()
+        self.type_code(c, ".-")
+        pause(c, 1.0)                                # letter, no space yet
+        self.type_code(c, "-")
+        pause(c, 0.6)
+        self.assertEqual(c.text, "AT")
 
     def test_hello_world(self):
-        c = MorseComposer(double_tap_window=0.4)
-        t = 0.0
-        for word in ("HELLO", "WORLD"):
-            if c.text:
-                t += 0.2
-                c.ring_tap(t)          # second tap right after the last letter
+        c = MorseComposer()
+        for i, word in enumerate(("HELLO", "WORLD")):
             for char in word:
-                t += 1.0
-                self.type_letter(c, MORSE_TABLE[char], t)
+                self.type_code(c, MORSE_TABLE[char])
+                pause(c, 0.7)
+            if i == 0:
+                pause(c, 2.1)
         self.assertEqual(c.text, "HELLO WORLD")
 
-    def test_invalid_code(self):
+    def test_invalid_code_adds_no_space(self):
         c = MorseComposer()
-        event = self.type_letter(c, "..--", 1.0)
-        self.assertEqual(event.kind, EventKind.INVALID)
+        self.type_code(c, "..--")
+        events = pause(c, 3.0)
+        self.assertEqual([e.kind for e in events], [EventKind.INVALID])
         self.assertEqual(c.text, "")
 
     def test_too_long_code_rejected_early(self):
@@ -82,17 +91,34 @@ class ComposerTest(unittest.TestCase):
         self.assertEqual(event.kind, EventKind.INVALID)
         self.assertEqual(c.code, "")
 
+    def test_pause_state_for_hud(self):
+        c = MorseComposer(letter_gap=0.5, word_gap=2.0)
+        self.assertEqual(c.pause_state(0.0), (None, 0.0))
+        c.add_symbol(".")
+        self.assertEqual(c.pause_state(0.25), ("letter", 0.5))
+        c.update(0.5)
+        self.assertEqual(c.pause_state(1.0), ("space", 0.5))
+
     def test_delete_symbol_then_char(self):
         c = MorseComposer()
-        self.type_letter(c, ".-", 1.0)
+        self.type_code(c, ".-")
+        pause(c, 0.6)
         c.add_symbol("-")
         self.assertEqual(c.delete().value, "-")
         self.assertEqual(c.delete().value, "A")
         self.assertIsNone(c.delete())
 
+    def test_delete_cancels_pending_space(self):
+        c = MorseComposer()
+        self.type_code(c, ".-")
+        pause(c, 0.6)
+        c.delete()
+        self.assertEqual(pause(c, 3.0), [])
+
     def test_clear(self):
         c = MorseComposer()
-        self.type_letter(c, ".-", 1.0)
+        self.type_code(c, ".-")
+        pause(c, 0.6)
         c.clear()
         self.assertEqual((c.text, c.code), ("", ""))
 

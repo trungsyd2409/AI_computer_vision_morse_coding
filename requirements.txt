@@ -3,3 +3,5 @@ opencv-python>=4.8
 numpy>=1.24
 pygame-ce>=2.5.2
 moderngl>=5.10
+# Optional, Windows only: shows camera names (e.g. "Camo") in the settings window.
+pygrabber>=0.2; sys_platform == "win32"

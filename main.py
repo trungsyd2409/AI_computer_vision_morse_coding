@@ -1,18 +1,18 @@
 """
-Morse Hand - type Morse code with your right hand in front of a webcam.
+Blink Morse - type Morse code with your eyes in front of a webcam.
 
 Run:  python main.py
-Keys: X camera settings, H toggle chart, M mute, Backspace / Delete edit,
-      Esc quit.
+Keys: X settings, P pause listening, H toggle chart, M mute,
+      Backspace / Delete edit, Esc quit.
 """
 
 import multiprocessing
 
-from morse_hand.app import MorseHandApp
+from blink_morse.app import BlinkMorseApp
 
 
 def main() -> None:
-    MorseHandApp().run()
+    BlinkMorseApp().run()
 
 
 if __name__ == "__main__":
