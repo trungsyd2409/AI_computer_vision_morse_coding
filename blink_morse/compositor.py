@@ -4,7 +4,9 @@ GPU compositor built on ModernGL.
 Each frame the CPU uploads three textures (camera image, UI layer, glow
 layer) and a single full-screen shader combines them:
 
-1. Colour-grade and darken the camera so the UI stays readable.
+1. Colour-grade the camera lightly and dim it a little so the UI stays
+   readable. `u_filter` fades all of this (and the panels) out, which is
+   how the Z key shows the untouched camera image.
 2. Draw frosted-glass panels: inside each rounded rectangle the camera is
    sampled from a low mipmap level, which is a cheap, smooth blur.
 3. Add the glow layer, also sampled from several mipmap levels, to get a
@@ -39,6 +41,7 @@ uniform vec2  u_cam_scale;       // crop that keeps the camera aspect ratio
 uniform vec2  u_cam_offset;
 uniform float u_cam_ready;       // 0 while no frame has arrived yet
 uniform float u_time;
+uniform float u_filter;          // 1 = styled look, 0 = raw camera image
 
 uniform int   u_panel_count;
 uniform vec4  u_panels[10];       // x, y, width, height in pixels
@@ -56,8 +59,8 @@ float sd_round_rect(vec2 p, vec2 half_size, float r) {
 
 vec3 grade(vec3 c) {
     float luma = dot(c, vec3(0.299, 0.587, 0.114));
-    c = mix(vec3(luma), c, 0.72);          // slightly desaturate
-    return c * vec3(0.88, 0.94, 1.06);     // cool tint
+    c = mix(vec3(luma), c, 0.88);          // take a little saturation out
+    return c * vec3(0.96, 0.99, 1.04);     // gentle cool tint
 }
 
 vec3 frosted(vec2 uv) {
@@ -78,11 +81,13 @@ void main() {
     vec2 px  = uv * u_res;
     vec2 cuv = u_cam_offset + uv * u_cam_scale;
 
-    // Background: graded, darkened camera with a soft vignette.
-    vec3 col = grade(texture(u_cam, cuv).rgb) * 0.64;
+    // Background: lightly graded camera, dimmed a touch, soft vignette.
+    vec3 raw = texture(u_cam, cuv).rgb;
+    vec3 col = grade(raw) * 0.86;
     vec2 d = uv - 0.5;
-    col *= 1.0 - dot(d, d) * 0.95;
+    col *= 1.0 - dot(d, d) * 0.55;
     col = mix(vec3(0.030, 0.035, 0.050), col, u_cam_ready);
+    raw = mix(vec3(0.030, 0.035, 0.050), raw, u_cam_ready);
 
     for (int i = 0; i < u_panel_count; ++i) {
         vec4 r = u_panels[i];
@@ -93,11 +98,12 @@ void main() {
         float shadow = (1.0 - smoothstep(0.0, 26.0, sd)) * step(0.0, sd);
         col *= 1.0 - shadow * 0.35;
 
-        // Glass fill: blurred camera, darkened and tinted.
+        // Glass fill: blurred camera with a light smoky tint, clear enough
+        // to see the room through it but dark enough for white text.
         float inside = 1.0 - smoothstep(-0.8, 0.8, sd);
         float t = clamp((px.y - r.y) / r.w, 0.0, 1.0);   // 0 at top, 1 at bottom
-        vec3 glass = grade(frosted(cuv)) * 0.34 * u_cam_ready;
-        glass += vec3(0.050, 0.056, 0.075);
+        vec3 glass = grade(frosted(cuv)) * 0.62 * u_cam_ready;
+        glass = mix(glass, vec3(0.055, 0.062, 0.082), 0.28);
         glass += vec3(0.030) * (1.0 - t);
         col = mix(col, glass, inside);
 
@@ -119,11 +125,14 @@ void main() {
               + textureLod(u_glow, uv, 4.2).rgb * 0.85;
     col += glow * (1.0 - col * 0.5);
 
+    // Z key: blend back to the untouched camera image.
+    col = mix(raw, col, u_filter);
+
     vec4 ui = texture(u_ui, uv);
     col = mix(col, ui.rgb, ui.a);
 
     float grain = fract(sin(dot(px + fract(u_time) * 97.0, vec2(12.9898, 78.233))) * 43758.5453);
-    col += (grain - 0.5) * 0.014;
+    col += (grain - 0.5) * 0.014 * u_filter;
 
     f_color = vec4(col, 1.0);
 }
@@ -152,6 +161,7 @@ class Compositor:
         self.program["u_res"] = size
         self.program["u_radius"] = 14.0
         self.program["u_cam_ready"] = 0.0
+        self.program["u_filter"] = 1.0
         self.program["u_cam_scale"] = (1.0, 1.0)
         self.program["u_cam_offset"] = (0.0, 0.0)
 
@@ -205,8 +215,10 @@ class Compositor:
         self.program["u_panel_accent"].write(accents.tobytes())
         self.program["u_panel_count"] = len(panels)
 
-    def render(self, time_s: float) -> None:
+    def render(self, time_s: float, filter_amount: float = 1.0) -> None:
+        """Draw the frame. `filter_amount` 0..1 fades the styled look in."""
         self.program["u_time"] = time_s
+        self.program["u_filter"] = float(filter_amount)
         self.ctx.screen.use()
         self.ctx.viewport = (0, 0, *self.size)
         self._cam_tex.use(0)

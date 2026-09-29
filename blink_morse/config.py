@@ -51,10 +51,10 @@ DANGER = (251, 113, 133)
 # One colour per action so the legend, the meters, the typed symbols and
 # the pause countdown all speak the same visual language.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # right wink
-    "dash": (167, 139, 250),      # both eyes
-    "letter": (251, 191, 36),     # left wink  -> end of letter
-    "word": (74, 222, 128),       # long pause -> space
+    "dot": (103, 232, 249),       # short blink
+    "dash": (167, 139, 250),      # long blink
+    "letter": (251, 191, 36),     # short pause -> end of letter
+    "word": (74, 222, 128),       # long pause  -> space
 }
 
 # ---------------------------------------------------------------------------
@@ -87,19 +87,28 @@ class CameraSettings:
 
 @dataclass
 class EyeSettings:
-    """Thresholds and timings for reading blinks and winks."""
+    """Threshold and timing for reading blinks."""
 
     # Eye closure is a 0..1 score after removing the user's own resting
     # level. Above `close_threshold` an eye counts as closed.
     close_threshold: float = 0.45
-    # One eye must be closed on its own this long to count as a wink. It
-    # only has to be long enough to rule out one eye leading a normal blink.
-    wink_confirm: float = 0.05
-    # Both eyes must stay closed this long to type a dash. 0 = instantly.
-    blink_filter: float = 0.0
-    # Pause with the eyes open that ends the word with a space.
-    space_pause: float = 3.0
+    # The Morse time unit t, in seconds. Everything is derived from it:
+    # blink < 1.5 t = dot, >= 1.5 t = dash, open 3 t = end of letter,
+    # open 7 t = end of word.
+    time_unit: float = 0.10
     swap_eyes: bool = False           # fixes cameras that mirror the image
+
+    @property
+    def dash_after(self) -> float:
+        return 1.5 * self.time_unit
+
+    @property
+    def letter_gap(self) -> float:
+        return 3.0 * self.time_unit
+
+    @property
+    def word_gap(self) -> float:
+        return 7.0 * self.time_unit
 
 
 @dataclass

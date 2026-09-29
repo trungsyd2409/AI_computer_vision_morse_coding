@@ -20,7 +20,7 @@ import math
 import multiprocessing as mp
 import platform
 
-from .config import (ACCENT, DANGER, FPS_CHOICES, MIN_ACCEPTABLE_FPS,
+from .config import (ACCENT, ACTION_COLORS, DANGER, FPS_CHOICES, MIN_ACCEPTABLE_FPS,
                      RESOLUTION_CHOICES, SETTINGS_SIZE, SETTINGS_TITLE, SUCCESS,
                      TEXT, TEXT_FAINT, TEXT_MUTED, WARNING)
 
@@ -189,12 +189,8 @@ class SettingsWindow:
             "eyes": page([
                 Slider("Close threshold", "eyes", "close_threshold",
                        eyes["close_threshold"], 0.25, 0.75, 0.01, "{:.2f}"),
-                Slider("Wink confirm", "eyes", "wink_confirm",
-                       eyes["wink_confirm"], 0.02, 0.15, 0.01, "{:.2f} s"),
-                Slider("Blink filter", "eyes", "blink_filter",
-                       eyes["blink_filter"], 0.0, 0.20, 0.01, "{:.2f} s"),
-                Slider("Space pause", "eyes", "space_pause",
-                       eyes["space_pause"], 1.0, 6.0, 0.1, "{:.1f} s"),
+                Slider("Time unit t", "eyes", "time_unit",
+                       eyes["time_unit"], 0.05, 0.50, 0.01, "{:.2f} s"),
                 Toggle("Swap left / right eye", "eyes", "swap_eyes", eyes["swap_eyes"]),
             ]),
         }
@@ -351,13 +347,35 @@ class SettingsWindow:
             widget.draw(s, self, hover=(widget is self.hover), enabled=enabled)
 
         if self.tab == "eyes":
-            last = self.pages["eyes"][-1].rect
-            for i, line in enumerate((
-                    "Blink filter 0 types a dash the instant both eyes",
-                    "close. Raise it a little if normal blinks add",
-                    "unwanted dashes, or press P to pause listening.")):
-                img = self._text("regular", 12, line, TEXT_FAINT)
-                s.blit(img, (PAD, last.bottom + 22 + i * 17))
+            self._draw_timing_card()
+
+    def _draw_timing_card(self) -> None:
+        """What the current time unit means, spelled out in seconds."""
+        pg = self.pg
+        from . import draw
+        s = self.screen
+        t = self.values["eyes"]["time_unit"]
+        last = self.pages["eyes"][-1].rect
+        card = pg.Rect(PAD, last.bottom + 18, SETTINGS_SIZE[0] - 2 * PAD, 138)
+        layer = pg.Surface(card.size, pg.SRCALPHA)
+        draw.rounded_rect(layer, (255, 255, 255, 12), layer.get_rect(), 12)
+        draw.rounded_rect(layer, (255, 255, 255, 26), layer.get_rect(), 12, 1)
+        s.blit(layer, card)
+        s.blit(self._label("Timing"), (card.x + 16, card.y + 14))
+
+        rows = [
+            (ACTION_COLORS["dot"], "Dot", f"blink shorter than {1.5 * t:.2f} s"),
+            (ACTION_COLORS["dash"], "Dash", f"blink {1.5 * t:.2f} s or longer"),
+            (ACTION_COLORS["letter"], "End letter", f"eyes open {3 * t:.2f} s"),
+            (ACTION_COLORS["word"], "Space", f"eyes open {7 * t:.2f} s"),
+        ]
+        for i, (color, name, rule) in enumerate(rows):
+            cy = card.y + 46 + i * 24
+            draw.circle(s, color, (card.x + 22, cy), 4)
+            img = self._text("medium", 13, name, TEXT)
+            s.blit(img, img.get_rect(midleft=(card.x + 34, cy)))
+            img = self._text("regular", 12, rule, TEXT_MUTED)
+            s.blit(img, img.get_rect(midright=(card.right - 16, cy)))
 
     def _label(self, text):
         pg = self.pg

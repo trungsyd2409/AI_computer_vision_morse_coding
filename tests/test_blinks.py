@@ -27,50 +27,37 @@ def kinds(events):
 
 
 class BlinkDetectorTest(unittest.TestCase):
+    """Default time unit t = 0.1 s, so a dash starts at 0.15 s of closure."""
+
     def setUp(self):
-        self.d = BlinkDetector()
+        self.d = BlinkDetector(time_unit=0.1)
         _, self.t = play(self.d, [(1.0, OPEN, OPEN)])     # settle the baselines
 
-    def test_both_eyes_type_a_dash_on_the_first_closed_frame(self):
-        events, _ = play(self.d, [(0.15, SHUT, SHUT), (0.3, OPEN, OPEN)], self.t)
-        self.assertEqual(kinds(events), [BlinkKind.DASH])
-        self.assertAlmostEqual(events[0].fired, events[0].started)   # no waiting
-
-    def test_right_wink_types_a_dot_within_a_few_frames(self):
-        events, _ = play(self.d, [(0.3, OPEN, SHUT), (0.3, OPEN, OPEN)], self.t)
-        self.assertEqual(kinds(events), [BlinkKind.DOT])
-        self.assertLess(events[0].fired - events[0].started, 0.1)
-
-    def test_left_wink_ends_the_letter(self):
-        events, _ = play(self.d, [(0.3, SHUT, OPEN), (0.3, OPEN, OPEN)], self.t)
-        self.assertEqual(kinds(events), [BlinkKind.END])
-        self.assertLess(events[0].fired - events[0].started, 0.1)
-
-    def test_blink_led_by_left_eye_is_still_a_dash(self):
-        script = [(1 / FPS, SHUT, OPEN), (0.12, SHUT, SHUT), (0.3, OPEN, OPEN)]
-        events, _ = play(self.d, script, self.t)
-        self.assertEqual(kinds(events), [BlinkKind.DASH])
-
-    def test_blink_led_by_right_eye_is_still_a_dash(self):
-        # The right eye closes one frame before the left one.
-        script = [(1 / FPS, OPEN, SHUT), (0.12, SHUT, SHUT), (0.3, OPEN, OPEN)]
-        events, _ = play(self.d, script, self.t)
-        self.assertEqual(kinds(events), [BlinkKind.DASH])
-
-    def test_left_eye_on_its_way_down_blocks_the_dot(self):
-        # Left eye half closed (not yet past the threshold) while the right
-        # is shut: this is the start of a blink, not a wink.
-        script = [(2 / FPS, 0.30, SHUT), (0.1, SHUT, SHUT), (0.3, OPEN, OPEN)]
-        events, _ = play(self.d, script, self.t)
-        self.assertEqual(kinds(events), [BlinkKind.DASH])
-
-    def test_wink_with_squinting_left_eye_still_counts(self):
-        events, _ = play(self.d, [(0.4, 0.55, 0.95), (0.3, OPEN, OPEN)], self.t)
+    def test_short_blink_is_a_dot(self):
+        events, _ = play(self.d, [(0.07, SHUT, SHUT), (0.2, OPEN, OPEN)], self.t)
         self.assertEqual(kinds(events), [BlinkKind.DOT])
 
-    def test_long_close_types_only_one_dash(self):
-        events, _ = play(self.d, [(1.0, SHUT, SHUT), (0.3, OPEN, OPEN)], self.t)
+    def test_long_blink_is_a_dash(self):
+        events, _ = play(self.d, [(0.3, SHUT, SHUT), (0.2, OPEN, OPEN)], self.t)
         self.assertEqual(kinds(events), [BlinkKind.DASH])
+
+    def test_dash_fires_while_eyes_are_still_closed(self):
+        events, t = play(self.d, [(0.5, SHUT, SHUT)], self.t)
+        self.assertEqual(kinds(events), [BlinkKind.DASH])
+        self.assertAlmostEqual(events[0].fired - events[0].started, 0.15, delta=0.04)
+        self.assertTrue(self.d.closed)
+        events, _ = play(self.d, [(0.2, OPEN, OPEN)], t)
+        self.assertEqual(events, [])          # no second symbol on opening
+
+    def test_split_point_scales_with_time_unit(self):
+        self.d.time_unit = 0.2                # dash from 0.3 s
+        events, _ = play(self.d, [(0.2, SHUT, SHUT), (0.2, OPEN, OPEN)], self.t)
+        self.assertEqual(kinds(events), [BlinkKind.DOT])
+
+    def test_single_eye_is_ignored(self):
+        events, _ = play(self.d, [(0.3, SHUT, OPEN), (0.2, OPEN, OPEN),
+                                  (0.3, OPEN, SHUT), (0.2, OPEN, OPEN)], self.t)
+        self.assertEqual(events, [])
 
     def test_one_noisy_open_frame_does_not_split_a_blink(self):
         script = [(0.1, SHUT, SHUT), (1 / FPS, OPEN, OPEN), (0.1, SHUT, SHUT),
@@ -78,27 +65,23 @@ class BlinkDetectorTest(unittest.TestCase):
         events, _ = play(self.d, script, self.t)
         self.assertEqual(kinds(events), [BlinkKind.DASH])
 
-    def test_fast_sequence(self):
-        script = [(0.1, OPEN, SHUT), (0.15, OPEN, OPEN),     # dot
-                  (0.1, SHUT, SHUT), (0.15, OPEN, OPEN),     # dash
-                  (0.1, OPEN, SHUT), (0.15, OPEN, OPEN),     # dot
-                  (0.1, SHUT, OPEN), (0.3, OPEN, OPEN)]      # end of letter
+    def test_sequence(self):
+        script = [(0.07, SHUT, SHUT), (0.15, OPEN, OPEN),
+                  (0.3, SHUT, SHUT), (0.15, OPEN, OPEN),
+                  (0.07, SHUT, SHUT), (0.3, OPEN, OPEN)]
         events, _ = play(self.d, script, self.t)
-        self.assertEqual(kinds(events), [BlinkKind.DOT, BlinkKind.DASH,
-                                         BlinkKind.DOT, BlinkKind.END])
-
-    def test_blink_filter_ignores_very_short_blinks(self):
-        self.d.blink_filter = 0.1
-        events, _ = play(self.d, [(0.066, SHUT, SHUT), (0.3, OPEN, OPEN)], self.t)
-        self.assertEqual(events, [])
-        events, _ = play(self.d, [(0.2, SHUT, SHUT), (0.3, OPEN, OPEN)], self.t + 1)
-        self.assertEqual(kinds(events), [BlinkKind.DASH])
+        self.assertEqual(kinds(events), [BlinkKind.DOT, BlinkKind.DASH, BlinkKind.DOT])
 
     def test_pause_time_counts_from_when_the_eyes_open(self):
         _, t = play(self.d, [(0.3, SHUT, SHUT)], self.t)
         self.assertEqual(self.d.pause_time(t), 0.0)      # still closed
         _, t = play(self.d, [(0.5, OPEN, OPEN)], t)
         self.assertAlmostEqual(self.d.pause_time(t), 0.5, delta=0.05)
+
+    def test_reset_restarts_the_pause(self):
+        _, t = play(self.d, [(0.1, SHUT, SHUT), (2.0, OPEN, OPEN)], self.t)
+        self.d.reset(t)
+        self.assertEqual(self.d.pause_time(t), 0.0)
 
 
 class EyeSignalTest(unittest.TestCase):

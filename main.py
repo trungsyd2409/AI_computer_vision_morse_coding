@@ -2,7 +2,7 @@
 Blink Morse - type Morse code with your eyes in front of a webcam.
 
 Run:  python main.py
-Keys: X settings, P pause listening, H toggle chart, M mute,
+Keys: X settings, Z hide UI, P pause listening, H toggle chart, M mute,
       Backspace / Delete edit, Esc quit.
 """
 

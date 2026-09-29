@@ -4,9 +4,12 @@ Application loop: camera -> face tracking -> blinks -> Morse -> screen.
 Per frame:
   1. Take the newest camera frame (the camera runs in its own thread).
   2. Mirror it and run MediaPipe to get the two eye blink scores.
-  3. Feed the scores to the blink detector: right wink = dot, both eyes =
-     dash, left wink = end of letter.
-  4. Let the Morse composer turn a long pause into a space.
+  3. Feed the scores to the blink detector, which times each blink:
+     short = dot, long = dash.
+  4. Let the Morse composer turn pauses into letters and spaces.
+
+Pressing Z hides the whole interface, shows the untouched camera image and
+switches input off until Z is pressed again.
   5. Draw the HUD and let the GPU compose the final image.
 
 Latency matters more than anything else here, so the symbol is typed and
@@ -63,11 +66,13 @@ class BlinkMorseApp:
         self.camera.start()
 
         e = self.settings.eyes
-        self.detector = BlinkDetector(e.close_threshold, e.wink_confirm, e.blink_filter)
-        self.composer = MorseComposer(e.space_pause)
+        self.detector = BlinkDetector(e.close_threshold, e.time_unit)
+        self.composer = MorseComposer(e.letter_gap, e.word_gap)
         self.settings_link = SettingsLink()
 
         self.paused = False               # P stops typing, e.g. to rest the eyes
+        self.ui_visible = True            # Z hides the UI and stops input
+        self._filter = 1.0                # current strength of the styled look
         self.show_chart = True
         self.fps = 0.0
         self._frame_id = 0
@@ -132,6 +137,8 @@ class BlinkMorseApp:
                 self.settings_link.toggle(self.settings.to_dict())
                 self._last_stats = 0.0
                 self._props_sent = False
+            elif event.key == pygame.K_z:
+                self._toggle_ui()
             elif event.key == pygame.K_p:
                 self.paused = not self.paused
                 self.sounds.play("pause" if self.paused else "resume")
@@ -145,11 +152,26 @@ class BlinkMorseApp:
                 self._apply_composer(self.composer.clear(), time.perf_counter())
         return True
 
+    def _toggle_ui(self) -> None:
+        self.ui_visible = not self.ui_visible
+        state = self._state
+        state.face = False
+        state.pose = "open"
+        self._chip_pos = {"left": None, "right": None}
+        # Start timing afresh, so time spent with the UI hidden is not
+        # counted as a pause that ends the letter.
+        self.detector.reset(time.perf_counter())
+
     def _process_frame(self, frame_bgr: np.ndarray, now: float) -> None:
         cam = self.settings.camera
         if cam.mirror:
             frame_bgr = cv2.flip(frame_bgr, 1)
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+        if not self.ui_visible:
+            # UI hidden: plain camera only, no face tracking, no typing.
+            self.compositor.update_camera(frame_rgb)
+            return
 
         # Detection first, so a blink is typed before any time is spent on
         # uploading textures or drawing.
@@ -173,7 +195,7 @@ class BlinkMorseApp:
             state.pose = self.detector.pose
             self._update_chip_positions(face, frame_rgb.shape)
 
-        # A long pause ends the word. Without a face the eyes cannot be
+        # Pauses end letters and words. Without a face the eyes cannot be
         # blinking, so the time since the last blink keeps counting.
         for event in self.composer.update(self.detector.pause_time(now)):
             self._apply_composer(event, now)
@@ -184,9 +206,6 @@ class BlinkMorseApp:
             self._apply_composer(self.composer.add_symbol("."), now)
         elif event.kind == BlinkKind.DASH:
             self._apply_composer(self.composer.add_symbol("-"), now)
-        elif event.kind == BlinkKind.END:
-            self.hud.on_end_wink(now)
-            self._apply_composer(self.composer.end_letter(), now)
 
     def _update_chip_positions(self, face, shape) -> None:
         """
@@ -280,9 +299,9 @@ class BlinkMorseApp:
         e = self.settings.eyes
         setattr(e, key, value)
         self.detector.close_threshold = e.close_threshold
-        self.detector.wink_confirm = e.wink_confirm
-        self.detector.blink_filter = e.blink_filter
-        self.composer.word_gap = e.space_pause
+        self.detector.time_unit = e.time_unit
+        self.composer.letter_gap = e.letter_gap
+        self.composer.word_gap = e.word_gap
 
     def _reset_settings(self) -> None:
         index = self.settings.camera.index
@@ -322,7 +341,10 @@ class BlinkMorseApp:
         state.fps = self.fps
         state.camera_error = self.camera.error
         state.open_threshold = 1.0 - e.close_threshold
-        state.space_pause = e.space_pause
+        state.dash_after = e.dash_after
+        state.letter_gap = e.letter_gap
+        state.word_gap = e.word_gap
+        state.closed_time = self.detector.closed_time(now)
         state.code = self.composer.code
         state.text = self.composer.text
         state.paused = self.paused
@@ -330,13 +352,22 @@ class BlinkMorseApp:
                        for side, p in self._chip_pos.items()}
 
         pause = self.detector.pause_time(now)
-        state.space_progress = self.composer.space_progress(pause)
-        state.space_left = max(0.0, e.space_pause - pause)
+        kind, progress = self.composer.pause_state(pause)
+        state.pause_kind = kind
+        state.pause_progress = progress
+        target = e.letter_gap if kind == "letter" else e.word_gap
+        state.pause_left = max(0.0, target - pause)
         state.muted = not self.sounds.enabled
         state.show_chart = self.show_chart
 
-        self.hud.draw(state, now)
+        # Fade the colour filter in or out over about a fifth of a second.
+        goal = 1.0 if self.ui_visible else 0.0
+        self._filter += (goal - self._filter) * 0.25
+        if abs(goal - self._filter) < 0.01:
+            self._filter = goal
+
+        self.hud.draw(state, now, self.ui_visible)
         self.compositor.set_panels(self.hud.panels)
         self.compositor.update_layers(self.hud.ui, self.hud.glow)
-        self.compositor.render(now - self._start)
+        self.compositor.render(now - self._start, self._filter)
         pygame.display.flip()

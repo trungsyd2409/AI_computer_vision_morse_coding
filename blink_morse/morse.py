@@ -67,18 +67,22 @@ class ComposerEvent:
 
 class MorseComposer:
     """
-    Builds a message from Morse input.
+    Builds a message from Morse input, using silences as separators, like
+    real Morse code.
 
-    * `add_symbol` appends a dot or dash to the letter in progress.
-    * `end_letter` looks the letter up and adds it to the text.
-    * `update(pause)` is called every frame with the time the input has
-      been idle. After `word_gap` seconds the word ends: a letter still in
-      progress is finished first, then a space is added.
+    `update(pause)` is called every frame with how long the input has been
+    idle (the eyes open since the last blink):
 
-    Starting a new symbol before `word_gap` keeps the same word going.
+    * idle for `letter_gap` with symbols pending -> the letter ends
+    * idle for `word_gap` after a letter          -> a space is added
+
+    Both gaps are measured from the same moment, so a new symbol typed in
+    between simply continues the same word.
     """
 
-    def __init__(self, word_gap: float = 3.0, max_text: int = 200):
+    def __init__(self, letter_gap: float = 0.3, word_gap: float = 0.7,
+                 max_text: int = 200):
+        self.letter_gap = letter_gap
         self.word_gap = word_gap
         self.max_text = max_text
         self.code = ""                     # symbols of the letter in progress
@@ -119,23 +123,26 @@ class MorseComposer:
         Call every frame with the number of seconds the input has been idle.
         Returns the events (letter, space) that the pause produced.
         """
-        if pause < self.word_gap:
-            return []
         events = []
-        if self.code:
+        if self.code and pause >= self.letter_gap:
             events.append(self.end_letter())
-        if self._space_pending:
+        if self._space_pending and pause >= self.word_gap:
             self._space_pending = False
             space = self._insert_space()
             if space is not None:
                 events.append(space)
         return events
 
-    def space_progress(self, pause: float) -> float:
-        """0..1 progress of the pause towards a space, or -1 if none is due."""
-        if not (self.code or self._space_pending):
-            return -1.0
-        return min(1.0, pause / self.word_gap)
+    def pause_state(self, pause: float) -> tuple:
+        """
+        What the current pause is counting towards, for the HUD:
+        ("letter", progress 0..1), ("space", progress 0..1) or (None, 0).
+        """
+        if self.code:
+            return "letter", min(1.0, pause / self.letter_gap)
+        if self._space_pending:
+            return "space", min(1.0, pause / self.word_gap)
+        return None, 0.0
 
     # -- delete and clear ------------------------------------------------------
 
