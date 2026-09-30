@@ -90,6 +90,13 @@ class ComposerTest(unittest.TestCase):
         self.assertEqual(c.delete().value, "A")
         self.assertIsNone(c.delete())
 
+    def test_take_text_empties_the_message(self):
+        c = MorseComposer()
+        self.type_letter(c, ".-", 1.0)
+        self.assertEqual(c.take_text(), "A")
+        self.assertEqual(c.text, "")
+        self.assertEqual(c.take_text(), "")
+
     def test_clear(self):
         c = MorseComposer()
         self.type_letter(c, ".-", 1.0)

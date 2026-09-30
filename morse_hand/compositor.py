@@ -4,12 +4,13 @@ GPU compositor built on ModernGL.
 Each frame the CPU uploads three textures (camera image, UI layer, glow
 layer) and a single full-screen shader combines them:
 
-1. Colour-grade and darken the camera so the UI stays readable.
-2. Draw frosted-glass panels: inside each rounded rectangle the camera is
-   sampled from a low mipmap level, which is a cheap, smooth blur.
-3. Add the glow layer, also sampled from several mipmap levels, to get a
-   bloom effect without extra render passes.
-4. Blend the UI layer on top and add a touch of film grain.
+1. Draw the camera image, with its original colours, inside the camera
+   rectangle. Everything outside it is black.
+2. Draw glass panels (the chart and the message box) as rounded rectangles
+   with a soft tint and a hairline border.
+3. Add the glow layer, sampled from several mipmap levels, to get a bloom
+   effect without extra render passes.
+4. Blend the UI layer on top.
 """
 
 import moderngl
@@ -35,10 +36,10 @@ uniform sampler2D u_ui;
 uniform sampler2D u_glow;
 
 uniform vec2  u_res;
+uniform vec4  u_cam_rect;        // x, y, width, height of the camera area
 uniform vec2  u_cam_scale;       // crop that keeps the camera aspect ratio
 uniform vec2  u_cam_offset;
 uniform float u_cam_ready;       // 0 while no frame has arrived yet
-uniform float u_time;
 
 uniform int   u_panel_count;
 uniform vec4  u_panels[8];       // x, y, width, height in pixels
@@ -48,56 +49,37 @@ uniform float u_radius;
 in vec2 v_uv;
 out vec4 f_color;
 
+const vec3 BACKGROUND = vec3(0.0);
+
 // Signed distance to a rounded rectangle centred on the origin.
 float sd_round_rect(vec2 p, vec2 half_size, float r) {
     vec2 q = abs(p) - half_size + r;
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
-vec3 grade(vec3 c) {
-    float luma = dot(c, vec3(0.299, 0.587, 0.114));
-    c = mix(vec3(luma), c, 0.72);          // slightly desaturate
-    return c * vec3(0.88, 0.94, 1.06);     // cool tint
-}
-
-vec3 frosted(vec2 uv) {
-    // Five taps on a blurry mip level remove the blocky look of a single tap.
-    vec2 o = 10.0 / vec2(textureSize(u_cam, 0));
-    float lod = 3.4;
-    vec3 s = textureLod(u_cam, uv, lod).rgb * 0.36;
-    s += textureLod(u_cam, uv + vec2( o.x, 0.0), lod).rgb * 0.16;
-    s += textureLod(u_cam, uv + vec2(-o.x, 0.0), lod).rgb * 0.16;
-    s += textureLod(u_cam, uv + vec2(0.0,  o.y), lod).rgb * 0.16;
-    s += textureLod(u_cam, uv + vec2(0.0, -o.y), lod).rgb * 0.16;
-    return s;
-}
-
 void main() {
     // Textures are uploaded top row first, so flip v to get top-left origin.
-    vec2 uv  = vec2(v_uv.x, 1.0 - v_uv.y);
-    vec2 px  = uv * u_res;
-    vec2 cuv = u_cam_offset + uv * u_cam_scale;
+    vec2 uv = vec2(v_uv.x, 1.0 - v_uv.y);
+    vec2 px = uv * u_res;
 
-    // Background: graded, darkened camera with a soft vignette.
-    vec3 col = grade(texture(u_cam, cuv).rgb) * 0.64;
-    vec2 d = uv - 0.5;
-    col *= 1.0 - dot(d, d) * 0.95;
-    col = mix(vec3(0.030, 0.035, 0.050), col, u_cam_ready);
+    // Camera, untouched, inside its rectangle; black everywhere else.
+    vec2 local = (px - u_cam_rect.xy) / u_cam_rect.zw;
+    bool in_cam = all(greaterThanEqual(local, vec2(0.0))) &&
+                  all(lessThan(local, vec2(1.0)));
+    vec3 col = BACKGROUND;
+    if (in_cam && u_cam_ready > 0.5) {
+        col = texture(u_cam, u_cam_offset + local * u_cam_scale).rgb;
+    }
 
     for (int i = 0; i < u_panel_count; ++i) {
         vec4 r = u_panels[i];
         vec2 centre = r.xy + r.zw * 0.5;
         float sd = sd_round_rect(px - centre, r.zw * 0.5, u_radius);
 
-        // Soft drop shadow outside the panel.
-        float shadow = (1.0 - smoothstep(0.0, 26.0, sd)) * step(0.0, sd);
-        col *= 1.0 - shadow * 0.35;
-
-        // Glass fill: blurred camera, darkened and tinted.
+        // Panel fill: a dark smoky tint, a little lighter at the top.
         float inside = 1.0 - smoothstep(-0.8, 0.8, sd);
         float t = clamp((px.y - r.y) / r.w, 0.0, 1.0);   // 0 at top, 1 at bottom
-        vec3 glass = grade(frosted(cuv)) * 0.34 * u_cam_ready;
-        glass += vec3(0.050, 0.056, 0.075);
+        vec3 glass = mix(col, vec3(0.075, 0.082, 0.105), 0.78);
         glass += vec3(0.030) * (1.0 - t);
         col = mix(col, glass, inside);
 
@@ -122,18 +104,16 @@ void main() {
     vec4 ui = texture(u_ui, uv);
     col = mix(col, ui.rgb, ui.a);
 
-    float grain = fract(sin(dot(px + fract(u_time) * 97.0, vec2(12.9898, 78.233))) * 43758.5453);
-    col += (grain - 0.5) * 0.014;
-
     f_color = vec4(col, 1.0);
 }
 """
 
 
 class Compositor:
-    def __init__(self, ctx: moderngl.Context, size: tuple):
+    def __init__(self, ctx: moderngl.Context, size: tuple, camera_rect: tuple):
         self.ctx = ctx
         self.size = size
+        self.camera_rect = camera_rect
         self.program = ctx.program(vertex_shader=VERTEX_SHADER,
                                    fragment_shader=FRAGMENT_SHADER)
 
@@ -154,6 +134,7 @@ class Compositor:
         self.program["u_cam_ready"] = 0.0
         self.program["u_cam_scale"] = (1.0, 1.0)
         self.program["u_cam_offset"] = (0.0, 0.0)
+        self.program["u_cam_rect"] = tuple(float(v) for v in camera_rect)
 
         # A 1x1 black texture so the shader is valid before the camera starts.
         self._set_camera_texture(np.zeros((1, 1, 3), dtype=np.uint8))
@@ -184,7 +165,7 @@ class Compositor:
     def update_camera(self, frame_rgb: np.ndarray) -> None:
         self._set_camera_texture(frame_rgb)
         self.program["u_cam_ready"] = 1.0
-        scale, offset = cover_crop(self._cam_size, self.size)
+        scale, offset = cover_crop(self._cam_size, self.camera_rect[2:])
         self.program["u_cam_scale"] = scale
         self.program["u_cam_offset"] = offset
 
@@ -205,8 +186,7 @@ class Compositor:
         self.program["u_panel_accent"].write(accents.tobytes())
         self.program["u_panel_count"] = len(panels)
 
-    def render(self, time_s: float) -> None:
-        self.program["u_time"] = time_s
+    def render(self) -> None:
         self.ctx.screen.use()
         self.ctx.viewport = (0, 0, *self.size)
         self._cam_tex.use(0)

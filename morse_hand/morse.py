@@ -149,6 +149,13 @@ class MorseComposer:
             return ComposerEvent(EventKind.DELETE, removed)
         return None
 
+    def take_text(self) -> str:
+        """Return the finished message and empty it, ready for the next one."""
+        text = self.text.strip()
+        self.text = ""
+        self._ring_armed = False
+        return text
+
     def clear(self) -> ComposerEvent:
         self._ring_armed = False
         self.code = ""

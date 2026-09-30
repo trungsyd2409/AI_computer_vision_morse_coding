@@ -32,7 +32,11 @@ HAND_MODEL_URL = (
 # ---------------------------------------------------------------------------
 
 APP_TITLE = "Morse Hand"
-WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
+WINDOW_SIZE = (480, 800)          # portrait, 3:5
+# Where the camera image goes inside the window: full width, vertically
+# centred, 4:3 like most webcams. The strips above and below stay black and
+# hold the Morse chart and the chat.
+CAMERA_RECT = (0, 220, 480, 360)
 SETTINGS_TITLE = "Camera Settings"
 SETTINGS_SIZE = (400, 720)
 

@@ -79,12 +79,23 @@ Hold your **right hand** up to the camera, palm facing the screen. The left hand
 2. Index, index (`··`) then ring once. **I** pops up.
 3. Ring again straight away to add a space before the next word.
 
-While a letter is in progress, the chart on the right dims every character you can no longer reach and highlights the exact match, so you never need to memorise the whole alphabet.
+### Screen layout
+
+The window is a 480 × 800 portrait (3:5):
+
+| Area | What it shows |
+|---|---|
+| Top black strip | The Morse chart. While a letter is in progress it dims every character you can no longer reach and highlights the exact match, so you never need to memorise the whole alphabet. |
+| Middle | The camera with its original colours, kept at its own aspect ratio so the image is never stretched. The dots and dashes of the letter you are typing appear in the centre, with no box around them, until the letter ends and pops up as a Latin letter. |
+| Bottom black strip | The message box at the very bottom, and above it the messages you have already sent, shown as chat bubbles with the time. |
+
+**Sending a message.** Press `Enter` to send what is in the message box. It moves up into the chat as a bubble (newest at the bottom, older ones pushed up) and the box is emptied for the next message. The chat history lasts until the app is closed.
 
 ### Keyboard shortcuts
 
 | Key | Action |
 |---|---|
+| `Enter` | Send the message to the chat above the message box |
 | `X` | Open or close the camera settings window |
 | `H` | Show or hide the Morse chart |
 | `M` | Mute or unmute sounds |
@@ -98,7 +109,7 @@ While a letter is in progress, the chart on the right dims every character you c
 
 Press `X` to open it. Changes apply instantly and are saved to `settings.json` when the app closes.
 
-- **Live stats**: the real capture resolution, camera FPS and app FPS. Green is 30 FPS or more, amber is 15 to 30, red is below 15.
+- **Live stats**: the real capture resolution, camera FPS and app FPS. Green is 30 FPS or more, amber is 15 to 30, red is below 15. FPS is shown only here, not on the main screen.
 - **Camera**: device number, resolution, target FPS (30 or 60), mirror view, auto exposure, and manual exposure, brightness, contrast and gain.
 - **Gestures**: how close the fingers must be to count as a touch, the double-tap window for the space, how long the pinky hold takes, and a switch for cameras that report left and right the wrong way round.
 - **Driver settings** (Windows): opens the camera maker's own settings dialog for anything not listed here.
@@ -142,7 +153,7 @@ Think of the app as a small assembly line with five stations.
 
 4. **The Morse translator builds letters.** Each touch is turned into an instruction: dot, dash, finish the letter, space, delete or clear. The dots and dashes are collected until you touch the ring finger, then they are looked up in the international Morse table, exactly like a telegraph operator would do with a code book. If the code does not exist, the app shows a red question mark instead of guessing.
 
-5. **The screen shows the result.** The camera picture is dimmed, information panels that look like frosted glass float on top, each finger has its own colour, and a short sound confirms every action. The finished letter pops up in the middle and is added to the message at the bottom.
+5. **The screen shows the result.** The camera picture keeps its normal colours. The dots and dashes you type glow in the middle of the picture, each finger has its own colour, and a short sound confirms every action. The finished letter pops up in the middle and is added to the message at the bottom. Press Enter and the message moves up into a chat history, like a messaging app.
 
 The app never records or uploads anything. Every picture is processed in memory and thrown away straight after.
 
@@ -217,11 +228,12 @@ Drawing uses a vectorised **One Euro filter** (Casiez et al., 2012) on all 63 la
 
 Each frame uploads three textures and draws one full-screen triangle strip with a single fragment shader:
 
-1. **Camera texture** with mipmaps. The shader applies a cover crop (like CSS `object-fit: cover`) so any camera aspect ratio fills the 800×600 window without stretching, then desaturates, cools and darkens it and adds a vignette.
-2. **Glass panels**. The HUD sends up to 8 rectangles as uniforms. For each pixel the shader computes a rounded-rectangle signed distance field, giving anti-aliased edges, a soft drop shadow, a hairline border that is brighter at the top, and an optional accent colour used for flashes on commit or error. Inside a panel the camera is sampled at mip level 3.4 with five taps, which gives a smooth frosted blur at almost no cost.
+1. **Camera texture**. The camera is drawn only inside `CAMERA_RECT` (480 × 360, vertically centred in the 480 × 800 window) with its original colours, no filter. A cover crop (like CSS `object-fit: cover`) keeps any camera aspect ratio undistorted inside that rectangle. Everything outside it is black. Hand landmarks are mapped into the same rectangle, so the skeleton lines up with the hand.
+2. **Panels**. The HUD sends the chart and message box as rectangles in uniforms. For each pixel the shader computes a rounded-rectangle signed distance field, giving anti-aliased edges, a dark tint, a hairline border that is brighter at the top, and an optional accent colour used for flashes on commit, error or send.
 3. **Glow layer**. An opaque black pygame surface where bright shapes are added with `BLEND_RGB_ADD`. The shader adds three mip levels (1.0, 2.6, 4.2) of it, which gives a bloom effect without extra framebuffers or blur passes.
-4. **UI layer**. A transparent pygame surface with text, the hand skeleton and icons, blended last. It is cleared to a near-white colour with zero alpha so that anti-aliased edges of light text do not get dark fringes.
-5. A small amount of animated film grain removes banding in the dark gradients.
+4. **UI layer**. A transparent pygame surface with text, the hand skeleton, the Morse code in progress and the chat bubbles, blended last. It is cleared to a near-white colour with zero alpha so that anti-aliased edges of light text do not get dark fringes.
+
+Chat bubbles are word-wrapped to 330 px, cached per message, and drawn inside a clip rectangle between the camera and the message box, so older messages simply scroll out of view at the top.
 
 Text surfaces and the Morse chart (keyed by the current prefix) are cached, so a typical frame only renders the message line and a few animated shapes.
 
@@ -251,7 +263,7 @@ AI_computer_vision_morse_coding/
 │   ├── filters.py           One Euro smoothing filter
 │   ├── hud.py               everything drawn on top of the camera
 │   ├── draw.py              anti-aliased shapes, glow sprites, easing
-│   ├── compositor.py        ModernGL shader: glass panels and bloom
+│   ├── compositor.py        ModernGL shader: camera area, panels and bloom
 │   ├── audio.py             synthesised feedback sounds
 │   └── settings_window.py   camera settings window (separate process)
 ├── assets/fonts/            Inter and JetBrains Mono (OFL)

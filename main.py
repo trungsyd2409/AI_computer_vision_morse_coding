@@ -2,8 +2,8 @@
 Morse Hand - type Morse code with your right hand in front of a webcam.
 
 Run:  python main.py
-Keys: X camera settings, H toggle chart, M mute, Backspace / Delete edit,
-      Esc quit.
+Keys: Enter send message, X camera settings, H toggle chart, M mute,
+      Backspace / Delete edit, Esc quit.
 """
 
 import multiprocessing

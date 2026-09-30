@@ -1,16 +1,28 @@
 """
 Everything drawn on top of the camera image.
 
+Layout of the 480 x 800 portrait window (3:5):
+
+    +---------------------------+
+    |  Morse chart              |   black strip above the camera
+    +---------------------------+
+    |                           |
+    |   camera, code in centre  |   camera keeps its own aspect ratio
+    |                           |
+    +---------------------------+
+    |  sent messages (bubbles)  |   black strip below the camera
+    |  [ message being typed ]  |
+    +---------------------------+
+
 The HUD paints into two pygame surfaces every frame:
 
 * `ui`   - transparent layer with text, icons and the hand skeleton.
 * `glow` - opaque black layer where bright shapes are added. The GPU
            blurs it and adds it on top of the image, which produces the
-           soft light around fingertips and letters.
+           soft light around fingertips, symbols and letters.
 
-The frosted glass panels are not drawn here. The HUD only reports where
-they are (`panels`) and the GPU shader renders them, because blurring the
-camera behind a panel is far cheaper on the graphics card.
+The glass panels are not drawn here. The HUD only reports where they are
+(`panels`) and the GPU shader renders them.
 """
 
 import math
@@ -21,10 +33,10 @@ import numpy as np
 import pygame
 
 from . import draw
-from .config import (ACCENT, DANGER, FINGER_COLORS, FONTS_DIR, MIN_ACCEPTABLE_FPS,
-                     SUCCESS, TEXT, TEXT_FAINT, TEXT_MUTED, WARNING)
+from .config import (ACCENT, CAMERA_RECT, DANGER, FINGER_COLORS, FONTS_DIR,
+                     TEXT, TEXT_FAINT, TEXT_MUTED)
 from .gestures import FINGER_ORDER, FINGER_TIPS, THUMB_TIP
-from .morse import MORSE_TABLE, candidates, decode
+from .morse import MORSE_TABLE, candidates
 
 # Bones of the hand as pairs of landmark indices.
 HAND_BONES = [
@@ -36,16 +48,10 @@ HAND_BONES = [
     (0, 17),
 ]
 
-LEGEND_ROWS = [
-    ("index", "Index", "dot"),
-    ("middle", "Middle", "dash"),
-    ("ring", "Ring", "end  ·  ×2 space"),
-    ("pinky", "Pinky", "delete  ·  hold clear"),
-]
-
 # Characters shown in the reference chart, laid out column by column.
 CHART_CHARS = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-CHART_ROWS = 12
+CHART_ROWS = 6
+CHART_COLUMNS = 6
 PUNCTUATION_HINT = ". , ? ! ' / ( ) : = + - @"
 
 # The UI layer is cleared to this colour with zero alpha. Anti-aliased
@@ -53,14 +59,21 @@ PUNCTUATION_HINT = ". , ? ! ' / ( ) : = + - @"
 # from getting dark fringes.
 UI_CLEAR = (232, 236, 244, 0)
 
+BUBBLE_COLOR = (34, 86, 104, 235)       # sent message background
+BUBBLE_MAX_WIDTH = 330
+
+
+@dataclass
+class ChatMessage:
+    text: str
+    time: str                            # "14:05", shown next to the bubble
+
 
 @dataclass
 class HudState:
     """Snapshot of everything the HUD needs for one frame."""
 
-    fps: float = 0.0
     camera_error: Optional[str] = None
-    hand: str = "none"                   # "right", "left_only" or "none"
     landmarks: Optional[np.ndarray] = None   # (21, 2+) screen pixels, smoothed
     closeness: dict = field(default_factory=dict)
     active_finger: Optional[str] = None
@@ -68,8 +81,7 @@ class HudState:
     hold_progress: float = -1.0          # 0..1 while the pinky is held
     code: str = ""
     text: str = ""
-    space_progress: float = -1.0         # double-tap countdown, -1 if idle
-    muted: bool = False
+    chat: list = field(default_factory=list)   # ChatMessage, oldest first
     show_chart: bool = True
 
 
@@ -121,25 +133,31 @@ class Hud:
         self.fonts = Fonts()
         self._text_cache = {}
         self._chart_cache = {}
+        self._bubble_cache = {}
 
-        margin = 16
-        self.rect_title = pygame.Rect(margin, margin, 236, 60)
-        self.rect_legend = pygame.Rect(margin, 88, 236, 132)
-        self.rect_fps = pygame.Rect(w - margin - 100, margin, 100, 32)
-        self.rect_chart = pygame.Rect(w - margin - 212, 60, 212, 362)
-        self.rect_bottom = pygame.Rect(margin, h - margin - 150, w - 2 * margin, 150)
+        cam = pygame.Rect(CAMERA_RECT)
+        margin = 12
+        self.rect_camera = cam
+        # Chart fills the black strip above the camera.
+        self.rect_chart = pygame.Rect(margin, margin, w - 2 * margin, cam.top - 2 * margin)
+        # Message box sits at the bottom, sent messages stack above it.
+        self.rect_message = pygame.Rect(margin, h - margin - 72, w - 2 * margin, 72)
+        self.rect_chat = pygame.Rect(margin, cam.bottom + 8, w - 2 * margin,
+                                     self.rect_message.top - cam.bottom - 16)
         self.rect_error = pygame.Rect(0, 0, 320, 96)
-        self.rect_error.center = (w // 2, h // 2 - 40)
+        self.rect_error.center = cam.center
 
-        # Point between the two side panels where letters pop up.
-        self.pop_center = ((self.rect_legend.right + self.rect_chart.left) / 2, 250)
+        # The Morse code in progress, and the letter it becomes, appear in
+        # the middle of the camera image.
+        self.code_center = cam.center
 
         # Animation state
         self._pops = []           # (text, color, start, size)
         self._bursts = []         # (x, y, color, start)
         self._shake_start = -10.0
         self._symbol_start = -10.0
-        self._bottom_flash = (-10.0, ACCENT)
+        self._message_flash = (-10.0, ACCENT)
+        self._sent_start = -10.0
         self.panels = []
 
     # ------------------------------------------------------------------------
@@ -153,20 +171,24 @@ class Hud:
         self._symbol_start = now
 
     def on_letter(self, char: str, now: float) -> None:
-        self._pops.append((char, TEXT, now, 140))
-        self._bottom_flash = (now, ACCENT)
+        self._pops.append((char, TEXT, now, 120))
+        self._message_flash = (now, ACCENT)
 
     def on_space(self, now: float) -> None:
-        self._pops.append(("space", FINGER_COLORS["ring"], now, 40))
+        self._pops.append(("space", FINGER_COLORS["ring"], now, 36))
 
     def on_invalid(self, code: str, now: float) -> None:
-        self._pops.append(("?", DANGER, now, 140))
+        self._pops.append(("?", DANGER, now, 120))
         self._shake_start = now
-        self._bottom_flash = (now, DANGER)
+        self._message_flash = (now, DANGER)
 
     def on_clear(self, now: float) -> None:
-        self._pops.append(("cleared", FINGER_COLORS["pinky"], now, 40))
-        self._bottom_flash = (now, FINGER_COLORS["pinky"])
+        self._pops.append(("cleared", FINGER_COLORS["pinky"], now, 36))
+        self._message_flash = (now, FINGER_COLORS["pinky"])
+
+    def on_sent(self, now: float) -> None:
+        self._sent_start = now
+        self._message_flash = (now, ACCENT)
 
     # ------------------------------------------------------------------------
     # Frame
@@ -179,13 +201,11 @@ class Hud:
 
         if state.landmarks is not None:
             self._draw_hand(state, now)
-
-        self._draw_title(state)
-        self._draw_legend(state)
-        self._draw_fps(state)
         if state.show_chart:
             self._draw_chart(state)
-        self._draw_bottom(state, now)
+        self._draw_code(state, now)
+        self._draw_chat(state, now)
+        self._draw_message(state, now)
         if state.camera_error:
             self._draw_camera_error(state)
 
@@ -194,14 +214,9 @@ class Hud:
         self._draw_pops(now)
 
     def _build_panels(self, state: HudState, now: float) -> None:
-        flash_t, flash_color = self._bottom_flash
+        flash_t, flash_color = self._message_flash
         flash = max(0.0, 1.0 - (now - flash_t) / 0.6)
-        self.panels = [
-            Panel(self.rect_title),
-            Panel(self.rect_legend),
-            Panel(self.rect_fps),
-            Panel(self.rect_bottom, flash, flash_color),
-        ]
+        self.panels = [Panel(self.rect_message, flash, flash_color)]
         if state.show_chart:
             self.panels.append(Panel(self.rect_chart))
         if state.camera_error:
@@ -293,54 +308,6 @@ class Hud:
     # Panels
     # ------------------------------------------------------------------------
 
-    def _draw_title(self, state: HudState) -> None:
-        r = self.rect_title
-        self.blit(self.text("semibold", 17, "Morse Hand", TEXT), (r.x + 16, r.y + 10))
-
-        if state.camera_error:
-            dot, msg = DANGER, "Camera unavailable"
-        elif state.hand == "right":
-            dot, msg = SUCCESS, "Right hand tracked"
-        elif state.hand == "left_only":
-            dot, msg = WARNING, "Left hand ignored, use right"
-        else:
-            dot, msg = TEXT_FAINT, "Show your right hand"
-
-        cy = r.y + 43
-        draw.circle(self.ui, dot, (r.x + 20, cy), 3.5)
-        if dot is not TEXT_FAINT:
-            draw.glow(self.glow, dot, (r.x + 20, cy), 10, 0.6)
-        self.blit(self.text("regular", 12, msg, TEXT_MUTED), (r.x + 30, cy), "midleft")
-
-    def _draw_legend(self, state: HudState) -> None:
-        r = self.rect_legend
-        for i, (finger, name, action) in enumerate(LEGEND_ROWS):
-            cy = r.y + 22 + i * 29
-            color = FINGER_COLORS[finger]
-            if state.active_finger == finger:
-                pill = pygame.Rect(r.x + 8, cy - 12, r.w - 16, 24)
-                draw.rounded_rect(self.ui, draw.with_alpha(color, 0.16), pill, 8)
-            draw.circle(self.ui, color, (r.x + 20, cy), 4.5)
-            draw.glow(self.glow, color, (r.x + 20, cy), 9, 0.35)
-            self.blit(self.text("medium", 13, name, TEXT), (r.x + 34, cy), "midleft")
-            self.blit(self.text("regular", 12, action, TEXT_MUTED),
-                      (r.right - 14, cy), "midright")
-
-    def _draw_fps(self, state: HudState) -> None:
-        r = self.rect_fps
-        if state.fps >= 30:
-            color = SUCCESS
-        elif state.fps >= MIN_ACCEPTABLE_FPS:
-            color = WARNING
-        else:
-            color = DANGER
-        label = self.text("mono", 13, f"{state.fps:4.0f} FPS", TEXT)
-        total = 14 + label.get_width()
-        x = r.centerx - total / 2
-        draw.circle(self.ui, color, (x + 3, r.centery), 3.5)
-        draw.glow(self.glow, color, (x + 3, r.centery), 10, 0.6)
-        self.blit(label, (x + 14, r.centery), "midleft")
-
     def _draw_chart(self, state: HudState) -> None:
         # The chart only changes when the typed code changes, so it is cached.
         key = state.code
@@ -363,16 +330,16 @@ class Hud:
             n = len(candidates(prefix))
             hint = self.text("regular", 11, f"{n} match" + ("" if n == 1 else "es"),
                              ACCENT if n else DANGER)
-            surf.blit(hint, hint.get_rect(topright=(r.w - 14, 12)))
+            surf.blit(hint, (header.get_width() + 26, 13))
 
-        # Digits have five symbols each, so the last column is wider.
-        col_x = (14, 76, 138)
-        col_w = (60, 60, 68)
+        # Six columns of six characters fill the wide, short strip above the
+        # camera. Each column is wide enough for a five-symbol digit code.
+        col_w = (r.w - 28) / CHART_COLUMNS
         dot_color = TEXT
         for i, char in enumerate(CHART_CHARS):
             col, row = divmod(i, CHART_ROWS)
-            x = col_x[col]
-            cy = 46 + row * 24
+            x = round(14 + col * col_w)
+            cy = 48 + row * 26
             code = MORSE_TABLE[char]
 
             reachable = not prefix or code.startswith(prefix)
@@ -380,7 +347,7 @@ class Hud:
             alpha = 1.0 if reachable else 0.22
 
             if exact:
-                pill = pygame.Rect(x - 6, cy - 11, col_w[col], 22)
+                pill = pygame.Rect(x - 6, cy - 10, round(col_w) - 2, 20)
                 draw.rounded_rect(surf, draw.with_alpha(ACCENT, 0.18), pill, 7)
 
             char_color = ACCENT if exact else TEXT
@@ -400,122 +367,134 @@ class Hud:
                     gx += 10
 
         foot = self.text("mono", 10, PUNCTUATION_HINT, TEXT_FAINT)
-        surf.blit(foot, (14, r.h - 24))
+        surf.blit(foot, foot.get_rect(topright=(r.w - 14, 16)))
         return surf
 
-    def _draw_bottom(self, state: HudState, now: float) -> None:
-        r = self.rect_bottom
-        x0 = r.x + 20
+    # ------------------------------------------------------------------------
+    # Morse code in the middle of the camera
+    # ------------------------------------------------------------------------
 
-        # Row 1: caption and keyboard hints
-        self.blit(self.label("Current letter"), (x0, r.y + 16))
-        self._draw_key_hints(r.right - 20, r.y + 21, state)
+    def _draw_code(self, state: HudState, now: float) -> None:
+        """
+        The dots and dashes of the letter in progress, centred on the camera
+        image with no box around them. They stay until the letter ends.
+        """
+        code = state.code
+        if not code:
+            return
+        widths = [22 if sym == "." else 48 for sym in code]
+        gap = 14
+        total = sum(widths) + gap * (len(code) - 1)
+        cx, cy = self.code_center
+        x = cx - total / 2
 
-        # Row 2: the dots and dashes typed so far
-        cy = r.y + 56
-        shake = 0.0
         dt = now - self._shake_start
         if dt < 0.35:
-            shake = math.sin(dt * 60) * 7 * (1 - dt / 0.35)
+            x += math.sin(dt * 60) * 8 * (1 - dt / 0.35)
 
-        if state.code:
-            self._draw_code(state.code, x0 + shake, cy, now)
-            self._draw_prediction(state.code, r.right - 20, cy)
-        elif state.space_progress >= 0:
-            color = FINGER_COLORS["ring"]
-            draw.arc(self.ui, color, (x0 + 9, cy), 8, 0,
-                     2 * math.pi * (1 - state.space_progress), 2.5)
-            self.blit(self.text("medium", 14, "Tap ring again to add a space", color),
-                      (x0 + 28, cy), "midleft")
-        else:
-            self.blit(self.text("regular", 14,
-                                "Touch your thumb to a finger to start a letter",
-                                TEXT_FAINT), (x0 + shake, cy), "midleft")
+        t = now - self._symbol_start
+        for i, (sym, width) in enumerate(zip(code, widths)):
+            grow = draw.ease_out_back(t / 0.2) if i == len(code) - 1 else 1.0
+            mid = (x + width / 2, cy)
+            if sym == ".":
+                color = FINGER_COLORS["index"]
+                draw.glow(self.glow, color, mid, 26, 0.7 * grow)
+                draw.circle(self.ui, color, mid, 11 * grow)
+            else:
+                color = FINGER_COLORS["middle"]
+                draw.glow(self.glow, color, mid, 32, 0.7 * grow)
+                draw.capsule(self.ui, color, mid, 48 * grow, 18 * grow)
+            x += width + gap
 
-        # Divider
-        pygame.draw.line(self.ui, (255, 255, 255, 22),
-                         (x0, r.y + 84), (r.right - 20, r.y + 84))
+    # ------------------------------------------------------------------------
+    # Message box and sent messages
+    # ------------------------------------------------------------------------
 
-        # Row 3: the decoded message with a blinking caret
-        self.blit(self.label("Message"), (x0, r.y + 96))
-        if state.text:
-            count = self.text("regular", 11, f"{len(state.text)} chars", TEXT_FAINT)
-            self.blit(count, (r.right - 20, r.y + 95), "topright")
+    def _draw_message(self, state: HudState, now: float) -> None:
+        r = self.rect_message
+        x0 = r.x + 16
+        self.blit(self.label("Message"), (x0, r.y + 12))
+        hint = "Enter to send" if state.text else ""
+        if hint:
+            self.blit(self.text("regular", 11, hint, TEXT_FAINT), (r.right - 16, r.y + 11),
+                      "topright")
 
-        font = self.fonts.get("medium", 26)
-        max_w = r.w - 60
+        font = self.fonts.get("medium", 22)
+        max_w = r.w - 44
         shown = state.text
         # Keep the end of the message visible when it gets too long.
         while shown and font.size(shown)[0] > max_w:
             shown = shown[1:]
         if shown != state.text:
-            shown = "…" + shown[1:]
+            shown = "\u2026" + shown[1:]
 
-        ty = r.y + 128
+        ty = r.y + 47
         if shown:
             surf = font.render(shown, True, TEXT)
             rect = self.blit(surf, (x0, ty), "midleft")
             caret_x = rect.right + 3
         else:
-            self.blit(self.text("regular", 20, "Your message appears here", TEXT_FAINT),
-                      (x0 + 8, ty), "midleft")
+            self.blit(self.text("regular", 18, "Your message appears here", TEXT_FAINT),
+                      (x0 + 6, ty), "midleft")
             caret_x = x0
 
         if (now * 1.8) % 1.0 < 0.6:
-            caret = pygame.Rect(0, 0, 2, 24)
+            caret = pygame.Rect(0, 0, 2, 22)
             caret.midleft = (caret_x, ty)
             pygame.draw.rect(self.ui, ACCENT, caret, border_radius=1)
             draw.glow(self.glow, ACCENT, caret.center, 10, 0.5)
 
-    def _draw_code(self, code: str, x: float, cy: float, now: float) -> None:
-        for i, sym in enumerate(code):
-            is_last = i == len(code) - 1
-            grow = 1.0
-            if is_last:
-                grow = draw.ease_out_back((now - self._symbol_start) / 0.22)
-            if sym == ".":
-                color = FINGER_COLORS["index"]
-                draw.glow(self.glow, color, (x + 8, cy), 18, 0.55 * grow)
-                draw.circle(self.ui, color, (x + 8, cy), 7.5 * grow)
-                x += 28
-            else:
-                color = FINGER_COLORS["middle"]
-                draw.glow(self.glow, color, (x + 17, cy), 24, 0.55 * grow)
-                draw.capsule(self.ui, color, (x + 17, cy), 34 * grow, 13 * grow)
-                x += 48
+    def _bubble(self, message: ChatMessage) -> pygame.Surface:
+        """Render one sent message as a rounded bubble, word-wrapped."""
+        key = (message.text, message.time)
+        surf = self._bubble_cache.get(key)
+        if surf is not None:
+            return surf
+        if len(self._bubble_cache) > 200:
+            self._bubble_cache.clear()
 
-    def _draw_prediction(self, code: str, right: float, cy: float) -> None:
-        char = decode(code)
-        if char is not None:
-            glyph = self.text("display", 34, char, TEXT)
-            rect = self.blit(glyph, (right, cy), "midright")
-            draw.glow(self.glow, ACCENT, rect.center, 30, 0.45)
-            self.blit(self.text("regular", 12, "ring to confirm", TEXT_MUTED),
-                      (rect.left - 14, cy), "midright")
+        font = self.fonts.get("regular", 15)
+        lines = _wrap(message.text, font, BUBBLE_MAX_WIDTH - 28)
+        line_h = font.get_linesize()
+        text_w = max(font.size(line)[0] for line in lines)
+        w, h = text_w + 28, line_h * len(lines) + 18
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        surf.fill(UI_CLEAR)
+        # Rounded on all corners except the bottom right, like a sent message.
+        pygame.draw.rect(surf, BUBBLE_COLOR, surf.get_rect(), border_radius=14,
+                         border_bottom_right_radius=4)
+        for i, line in enumerate(lines):
+            surf.blit(font.render(line, True, TEXT), (14, 9 + i * line_h))
+        self._bubble_cache[key] = surf
+        return surf
+
+    def _draw_chat(self, state: HudState, now: float) -> None:
+        """Sent messages, newest at the bottom, older ones pushed upwards."""
+        area = self.rect_chat
+        if not state.chat:
             return
+        self.ui.set_clip(area)
+        y = area.bottom
+        slide = 0.0
+        t = now - self._sent_start
+        if t < 0.25:
+            # The newest bubble slides up into place.
+            slide = 18 * (1 - draw.ease_out_cubic(t / 0.25))
 
-        options = candidates(code)
-        if options:
-            preview = "  ".join(options[:6]) + ("  …" if len(options) > 6 else "")
-            self.blit(self.text("medium", 15, preview, TEXT_MUTED), (right, cy), "midright")
-        else:
-            self.blit(self.text("medium", 14, "no match", DANGER), (right, cy), "midright")
-
-    def _draw_key_hints(self, right: float, cy: float, state: HudState) -> None:
-        hints = [("X", "settings"), ("H", "chart"),
-                 ("M", "sound off" if state.muted else "sound")]
-        x = right
-        for key, text in reversed(hints):
-            label = self.text("regular", 11, text, TEXT_MUTED)
-            x -= label.get_width()
-            self.blit(label, (x, cy), "midleft")
-            x -= 6
-            cap = pygame.Rect(0, 0, 18, 18)
-            cap.midright = (round(x), round(cy))
-            draw.rounded_rect(self.ui, (255, 255, 255, 28), cap, 5)
-            draw.rounded_rect(self.ui, (255, 255, 255, 60), cap, 5, 1)
-            self.blit(self.text("mono", 10, key, TEXT), cap.center, "center")
-            x = cap.left - 14
+        for i, message in enumerate(reversed(state.chat)):
+            bubble = self._bubble(message)
+            rect = bubble.get_rect(bottomright=(area.right, round(y + slide)))
+            if i == 0 and t < 0.25:
+                bubble.set_alpha(int(255 * draw.ease_out_cubic(t / 0.25)))
+            else:
+                bubble.set_alpha(255)
+            self.ui.blit(bubble, rect)
+            stamp = self.text("regular", 10, message.time, TEXT_FAINT)
+            self.ui.blit(stamp, stamp.get_rect(bottomright=(rect.left - 8, rect.bottom - 2)))
+            y = rect.top - 8
+            if y < area.top:
+                break
+        self.ui.set_clip(None)
 
     def _draw_camera_error(self, state: HudState) -> None:
         r = self.rect_error
@@ -553,7 +532,7 @@ class Hud:
 
     def _draw_pops(self, now: float) -> None:
         alive = []
-        cx, cy = self.pop_center
+        cx, cy = self.code_center
         for text, color, start, size in self._pops:
             t = (now - start) / 0.9
             if t >= 1.0:
@@ -581,3 +560,25 @@ class Hud:
             self.glow.blit(glow_surf, glow_surf.get_rect(center=(cx, cy + rise)),
                            special_flags=pygame.BLEND_RGB_ADD)
         self._pops = alive
+
+
+def _wrap(text: str, font: pygame.font.Font, width: int) -> list:
+    """Split `text` into lines no wider than `width` pixels."""
+    lines, line = [], ""
+    for word in text.split(" "):
+        candidate = f"{line} {word}" if line else word
+        if font.size(candidate)[0] <= width:
+            line = candidate
+            continue
+        if line:
+            lines.append(line)
+        # A single word longer than the line is cut into pieces.
+        while font.size(word)[0] > width:
+            cut = len(word)
+            while cut > 1 and font.size(word[:cut])[0] > width:
+                cut -= 1
+            lines.append(word[:cut])
+            word = word[cut:]
+        line = word
+    lines.append(line)
+    return lines
