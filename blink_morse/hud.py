@@ -23,7 +23,7 @@ import pygame
 
 from . import draw
 from .config import (ACCENT, ACTION_COLORS, DANGER, FONTS_DIR, MIN_ACCEPTABLE_FPS,
-                     BROW_DOT, SUCCESS, TEXT, TEXT_FAINT, TEXT_MUTED, WARNING)
+                     SUCCESS, TEXT, TEXT_FAINT, TEXT_MUTED, WARNING)
 from .morse import MORSE_TABLE, candidates, decode
 
 # Characters shown in the reference chart, laid out column by column.
@@ -42,6 +42,8 @@ CHIP_GAP = 12              # distance between the eye corner and the readout
 
 # Colour of an eye that is closed on its own (a wink types nothing).
 WINK_COLOR = (200, 208, 224)
+# Outline and label of the tongue when it is out.
+TONGUE_COLOR = (251, 113, 133)
 
 
 @dataclass
@@ -55,8 +57,11 @@ class HudState:
     openness: dict = field(default_factory=lambda: {"left": 1.0, "right": 1.0})
     # Screen position of the readout next to each eye, or None
     chips: dict = field(default_factory=dict)
-    # Screen position of the middle of each eyebrow (green marker), or None
-    brow_dots: dict = field(default_factory=dict)
+    # Tongue outline / mouth opening / tip in screen pixels and length in mm,
+    # or None while no tongue is visible
+    tongue: Optional[dict] = None
+    tongue_mm: float = 0.0               # visible tongue length right now
+    tongue_threshold_mm: float = 20.0    # length that counts as "pressed"
     open_threshold: float = 0.55         # below this an eye counts as closed
     pose: str = "open"                   # open / left / right / both
     closed_time: float = 0.0             # length of the current blink so far
@@ -185,8 +190,7 @@ class Hud:
             self.blit(label, (self.size[0] - 16, 16), "topright")
             return
         self._build_panels(state, now)
-        self._draw_eye_chips(state)
-        self._draw_brow_dots(state)
+        self._draw_tongue(state)
 
         self._draw_title(state)
         self._draw_legend(state, now)
@@ -284,34 +288,27 @@ class Hud:
     # Panels
     # ------------------------------------------------------------------------
 
-    def _draw_eye_chips(self, state: HudState) -> None:
-        """Openness of each eye, as a percentage, beside the eye itself."""
-        for side, rect in self._chip_rects(state).items():
-            value = state.openness[side]
-            closed = value < state.open_threshold
-            color = self._eye_color(state)
-
-            dot = (rect.x + 13, rect.centery)
-            draw.circle(self.ui, color, dot, 3.5)
-            if closed:
-                draw.glow(self.glow, color, dot, 14, 0.8)
-            label = self.text("mono", 13, f"{round(value * 100):3d}%",
-                              color if closed else TEXT)
-            self.blit(label, (rect.right - 10, rect.centery), "midright")
-
-    def _draw_brow_dots(self, state: HudState) -> None:
-        """A small green dot in the middle of each eyebrow."""
-        if not state.face:
+    def _draw_tongue(self, state: HudState) -> None:
+        """Outline of the tongue, a line from the mouth to its tip and the length."""
+        t = state.tongue
+        if not t:
             return
-        for centre in state.brow_dots.values():
-            if centre is None:
-                continue
-            draw.circle(self.ui, BROW_DOT, centre, 4)
-            draw.glow(self.glow, BROW_DOT, centre, 8, 0.5)
+        # Pink while it is too short to count, then the colour of the symbol
+        # it will type (dot, then dash once it is held long enough).
+        pressed = state.pose == "both"
+        color = self._eye_color(state) if pressed else TONGUE_COLOR
+        if len(t["contour"]) >= 3:
+            pygame.draw.aalines(self.ui, color, True, t["contour"])
+        draw.line(self.ui, (255, 255, 255, 220), t["lip"], t["tip"], 1)
+        draw.circle(self.ui, color, t["tip"], 3)
+        draw.glow(self.glow, color, t["tip"], 10 if pressed else 6, 0.8 if pressed else 0.4)
+        text = f"{t['mm'] / 10:.1f} cm" if t["mm"] > 0 else "tongue"
+        label = self.text("mono", 13, text, color)
+        self.blit(label, (t["tip"][0] + 10, t["tip"][1] + 4), "midleft")
 
     def _draw_title(self, state: HudState) -> None:
         r = self.rect_title
-        self.blit(self.text("semibold", 17, "Brow Morse", TEXT), (r.x + 16, r.y + 10))
+        self.blit(self.text("semibold", 17, "Tongue Morse", TEXT), (r.x + 16, r.y + 10))
 
         if state.camera_error:
             dot, msg = DANGER, "Camera unavailable"
@@ -332,10 +329,10 @@ class Hud:
         def sec(v):
             return f"{round(v, 2):g} s"
         return [
-            ("dot", "Short raise", f"< {sec(state.dash_after)}  \u00b7"),
-            ("dash", "Long raise", f"\u2265 {sec(state.dash_after)}  \u2013"),
-            ("letter", f"Relax {sec(state.letter_gap)}", "end letter"),
-            ("word", f"Relax {sec(state.word_gap)}", "space"),
+            ("dot", "Short tongue", f"< {sec(state.dash_after)}  \u00b7"),
+            ("dash", "Long tongue", f"\u2265 {sec(state.dash_after)}  \u2013"),
+            ("letter", f"In {sec(state.letter_gap)}", "end letter"),
+            ("word", f"In {sec(state.word_gap)}", "space"),
         ]
 
     def _draw_legend(self, state: HudState, now: float) -> None:
@@ -361,33 +358,31 @@ class Hud:
                       (r.right - 14, cy), "midright")
 
     def _draw_meters(self, state: HudState) -> None:
-        """Two bars showing how open each eye is, with the threshold marked."""
+        """Visible tongue length on a bar, with the press threshold marked."""
         r = self.rect_meters
-        self.blit(self.label("Brow (relaxed)"), (r.x + 16, r.y + 12))
-        x0, x1 = r.x + 62, r.right - 62
-        for i, side in enumerate(("right", "left")):
-            cy = r.y + 40 + i * 24
-            color = self._eye_color(state) if state.face and \
-                state.openness.get(side, 1.0) < state.open_threshold else ACTION_COLORS["dot"]
-            value = state.openness.get(side, 1.0) if state.face else 0.0
-            closed = state.face and value < state.open_threshold
+        self.blit(self.label("Tongue length"), (r.x + 16, r.y + 12))
+        threshold = max(state.tongue_threshold_mm, 1.0)
+        length = state.tongue_mm if state.face else 0.0
+        pressed = state.face and state.pose == "both"
+        color = self._eye_color(state) if pressed else TONGUE_COLOR
 
-            self.blit(self.text("medium", 12, side.capitalize(), TEXT),
-                      (r.x + 16, cy), "midleft")
-            track = pygame.Rect(x0, cy - 3, x1 - x0, 6)
-            draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 3)
-            fill = track.copy()
-            fill.w = max(6, round(track.w * value))
-            draw.rounded_rect(self.ui, draw.with_alpha(color, 0.75), fill, 3)
-            if closed:
-                draw.glow(self.glow, color, (x0 + 4, cy), 16, 0.7)
+        # The bar runs from 0 to twice the threshold, so the mark sits in the middle.
+        cy = r.y + 40
+        x0, x1 = r.x + 16, r.right - 70
+        track = pygame.Rect(x0, cy - 3, x1 - x0, 6)
+        draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 3)
+        fill = track.copy()
+        fill.w = max(6, round(track.w * min(1.0, length / (2 * threshold))))
+        draw.rounded_rect(self.ui, draw.with_alpha(color, 0.75), fill, 3)
+        if pressed:
+            draw.glow(self.glow, color, (fill.right - 3, cy), 16, 0.7)
+        tx = x0 + track.w / 2
+        draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
+        self.blit(self.text("mono", 13, f"{length / 10:.1f} cm",
+                            color if pressed else TEXT), (r.right - 14, cy), "midright")
 
-            tx = x0 + track.w * state.open_threshold
-            draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
-
-            status = "up" if closed else f"{round(value * 100)}%"
-            self.blit(self.text("regular", 11, status, color if closed else TEXT_MUTED),
-                      (r.right - 14, cy), "midright")
+        hint = f"counts from {threshold / 10:.1f} cm (X to change)"
+        self.blit(self.text("regular", 11, hint, TEXT_MUTED), (r.x + 16, cy + 22), "midleft")
 
     def _draw_fps(self, state: HudState) -> None:
         r = self.rect_fps
@@ -502,7 +497,7 @@ class Hud:
                                 WARNING), (x0, cy), "midleft")
         else:
             self.blit(self.text("regular", 14,
-                                "Short brow raise for a dot, long raise for a dash",
+                                "Stick your tongue out: short for a dot, long for a dash",
                                 TEXT_FAINT), (x0 + shake, cy), "midleft")
 
         # Divider
@@ -606,7 +601,7 @@ class Hud:
 
         left = right - 56
         if char is not None:
-            self.blit(self.text("regular", 12, "relax brows to confirm", TEXT_MUTED),
+            self.blit(self.text("regular", 12, "tongue in to confirm", TEXT_MUTED),
                       (left, cy), "midright")
         elif options:
             preview = "  ".join(options[:6]) + ("  \u2026" if len(options) > 6 else "")

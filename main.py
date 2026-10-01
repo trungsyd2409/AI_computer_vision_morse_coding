@@ -1,6 +1,6 @@
 """
-Brow Morse - type Morse code by raising your eyebrows in front
-of a webcam. Short raise = dot, long raise = dash.
+Tongue Morse - type Morse code by sticking your tongue out in front of a
+webcam. Short = dot, long = dash; the length that counts is set with X.
 
 Run:  python main.py
 Keys: X settings, Z hide UI, P pause listening, H toggle chart, M mute,

@@ -1,22 +1,21 @@
 """
 Wrapper around MediaPipe's Face Landmarker (Tasks API).
 
-For every frame MediaPipe returns 478 face landmarks and 52 "blendshape"
-scores that describe the expression. The brow-raise scores drive the whole
-app: `browInnerUp` (shared by both brows) and `browOuterUpLeft/Right`. Each
-brow's score is the larger of the inner and its own outer score, from about
-0 (brows relaxed) to about 1 (brows raised high). Raising both brows works
-like pressing a telegraph key. The ends and middle of each eyebrow are also
-returned so the HUD can place a readout next to each brow and a small dot
-on it.
+For every frame MediaPipe returns 478 face landmarks (the face mesh plus
+the irises). MediaPipe has no landmarks for the tongue, so the tongue is
+found from colour around the mouth by `TongueDetector` (see tongue.py),
+which uses the landmarks to know where the lips, chin, cheeks and irises
+are. The result is the visible tongue length in millimetres; the app
+decides from the threshold in the settings whether that counts as a Morse
+"press".
 
-Which eye is "left"
--------------------
-MediaPipe names both landmarks and blendshapes after the face shown in the
-image, not after the viewer. When the frame is mirrored before detection
-(the usual selfie view), the face in the image is a mirror copy, so its
-"left" eye is the user's real right eye. This module does that swap once,
-so the rest of the app only ever deals with the user's own left and right.
+Which side is "left"
+--------------------
+MediaPipe names landmarks after the face shown in the image, not after the
+viewer. When the frame is mirrored before detection (the usual selfie
+view), the face in the image is a mirror copy, so its "left" is the user's
+real right. `build_result` does that swap once, so the rest of the app only
+ever deals with the user's own left and right.
 """
 
 import urllib.request
@@ -27,13 +26,7 @@ from typing import Optional
 import numpy as np
 
 from .config import FACE_MODEL_PATH, FACE_MODEL_URL
-
-# Eyebrow ends (outer, inner), named after the face as shown in the image.
-MP_RIGHT_EYE_CORNERS = (70, 107)
-MP_LEFT_EYE_CORNERS = (300, 336)
-# Middle of each eyebrow: (upper edge, lower edge), averaged into one point.
-MP_RIGHT_BROW_MIDDLE = (105, 52)
-MP_LEFT_BROW_MIDDLE = (334, 282)
+from .tongue import TongueDetector, TongueResult
 
 
 def ensure_model(path: Path = FACE_MODEL_PATH, url: str = FACE_MODEL_URL) -> Path:
@@ -52,11 +45,12 @@ def ensure_model(path: Path = FACE_MODEL_PATH, url: str = FACE_MODEL_URL) -> Pat
 class FaceResult:
     """One detected face, from the user's point of view."""
 
-    left_score: float            # raw brow-raise score of the user's left brow
-    right_score: float           # raw brow-raise score of the user's right brow
-    # (outer end, inner end, middle) of each eyebrow as normalised (x, y) pairs
+    left_score: float = 0.0
+    right_score: float = 0.0
     left_corners: Optional[tuple] = None
     right_corners: Optional[tuple] = None
+    # Tongue detection and visible tongue length (see tongue.py)
+    tongue: TongueResult = None
 
 
 class FaceTracker:
@@ -74,10 +68,10 @@ class FaceTracker:
             min_face_detection_confidence=0.5,
             min_face_presence_confidence=0.5,
             min_tracking_confidence=0.5,
-            output_face_blendshapes=True,
         )
         self._landmarker = vision.FaceLandmarker.create_from_options(options)
         self._last_ts = -1
+        self._tongue = TongueDetector()
 
     def detect(self, frame_rgb: np.ndarray, timestamp_ms: int,
                mirrored: bool, swap_eyes: bool = False) -> Optional[FaceResult]:
@@ -85,7 +79,7 @@ class FaceTracker:
         frame_rgb:    RGB uint8 image (already mirrored if `mirrored` is True)
         timestamp_ms: capture time; VIDEO mode requires it to keep increasing
         mirrored:     whether the frame was flipped horizontally
-        swap_eyes:    manual override for cameras that flip the image themselves
+        swap_eyes:    kept for compatibility, the tongue has no sides
         """
         # Guard against two frames sharing the same millisecond.
         timestamp_ms = max(timestamp_ms, self._last_ts + 1)
@@ -94,25 +88,14 @@ class FaceTracker:
         image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB,
                                data=np.ascontiguousarray(frame_rgb))
         result = self._landmarker.detect_for_video(image, timestamp_ms)
-        if not result.face_blendshapes:
+        if not result.face_landmarks:
+            self._tongue.reset()
             return None
 
-        scores = {c.category_name: c.score for c in result.face_blendshapes[0]}
-        corners = None
-        if result.face_landmarks:
-            lm = result.face_landmarks[0]
-
-            def points(ends, middle):
-                a, b = lm[middle[0]], lm[middle[1]]
-                mid = ((a.x + b.x) / 2, (a.y + b.y) / 2)
-                return tuple((lm[i].x, lm[i].y) for i in ends) + (mid,)
-
-            corners = (points(MP_LEFT_EYE_CORNERS, MP_LEFT_BROW_MIDDLE),
-                       points(MP_RIGHT_EYE_CORNERS, MP_RIGHT_BROW_MIDDLE))
-        inner = scores.get("browInnerUp", 0.0)
-        return build_result(max(inner, scores.get("browOuterUpLeft", 0.0)),
-                            max(inner, scores.get("browOuterUpRight", 0.0)),
-                            mirrored, swap_eyes, corners)
+        lm = result.face_landmarks[0]
+        h, w = frame_rgb.shape[:2]
+        pts = np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float64)
+        return FaceResult(tongue=self._tongue.update(frame_rgb, pts))
 
     def close(self) -> None:
         self._landmarker.close()
@@ -121,8 +104,8 @@ class FaceTracker:
 def build_result(mp_left: float, mp_right: float, mirrored: bool,
                  swap_eyes: bool = False, corners: Optional[tuple] = None) -> FaceResult:
     """
-    Map MediaPipe's image-face naming onto the user's own eyes.
-    `corners` is (MediaPipe left eye corners, MediaPipe right eye corners).
+    Map MediaPipe's image-face naming onto the user's own left and right.
+    `corners` is (MediaPipe left points, MediaPipe right points).
     Kept separate from the tracker so it can be unit tested.
     """
     mp_left_corners, mp_right_corners = corners if corners else (None, None)

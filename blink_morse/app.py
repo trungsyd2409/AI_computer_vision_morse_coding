@@ -3,9 +3,11 @@ Application loop: camera -> face tracking -> blinks -> Morse -> screen.
 
 Per frame:
   1. Take the newest camera frame (the camera runs in its own thread).
-  2. Mirror it and run MediaPipe to get the two eye blink scores.
-  3. Feed the scores to the blink detector, which times each blink:
-     short = dot, long = dash.
+  2. Mirror it, run MediaPipe for the face landmarks and measure how far
+     the tongue sticks out (tongue.py).
+  3. Turn that length into a score (the length threshold from the settings
+     is the "pressed" point) and feed it to the press detector, which times
+     each press: tongue out short = dot, long = dash.
   4. Let the Morse composer turn pauses into letters and spaces.
 
 Pressing Z hides the whole interface, shows the untouched camera image and
@@ -30,7 +32,11 @@ from .camera import CameraStream
 from .compositor import Compositor, cover_crop
 from .config import APP_TITLE, WINDOW_SIZE, AppSettings, CameraSettings, EyeSettings
 from .face_tracker import FaceTracker
-from .hud import CHIP_SIZE, CHIP_GAP, Hud, HudState
+
+# Score (0..1) at which the tongue counts as "pressed": the length
+# threshold from the settings is mapped onto this value.
+TONGUE_PRESS = 0.5
+from .hud import Hud, HudState
 from .morse import EventKind, MorseComposer
 from .settings_window import SettingsLink
 
@@ -66,11 +72,18 @@ class BlinkMorseApp:
         self.camera.start()
 
         e = self.settings.eyes
-        self.detector = BlinkDetector(e.close_threshold, e.time_unit)
+        # The tongue length is turned into a 0..1 score where the threshold
+        # from the settings sits exactly at 0.5 (see _tongue_score).
+        self.detector = BlinkDetector(TONGUE_PRESS, e.time_unit)
+        for signal in (self.detector.left, self.detector.right):
+            # A tongue that is in has a score of exactly 0, so there is no
+            # resting level to learn.
+            signal.baseline = 0.0
+            signal.MAX_BASELINE = 0.0
         self.composer = MorseComposer(e.letter_gap, e.word_gap)
         self.settings_link = SettingsLink()
 
-        self.paused = False               # P stops typing, e.g. to rest the eyes
+        self.paused = False               # P stops typing
         self.ui_visible = True            # Z hides the UI and stops input
         self._filter = 1.0                # current strength of the styled look
         self.show_chart = True
@@ -80,8 +93,7 @@ class BlinkMorseApp:
         self._last_stats = 0.0
         self._props_sent = False
         self._state = HudState()
-        self._chip_pos = {"left": None, "right": None}
-        self._brow_pos = {"left": None, "right": None}
+        self._tongue = None
 
     # ------------------------------------------------------------------------
 
@@ -158,8 +170,7 @@ class BlinkMorseApp:
         state = self._state
         state.face = False
         state.pose = "open"
-        self._chip_pos = {"left": None, "right": None}
-        self._brow_pos = {"left": None, "right": None}
+        self._tongue = None
         # Start timing afresh, so time spent with the UI hidden is not
         # counted as a pause that ends the letter.
         self.detector.reset(time.perf_counter())
@@ -186,17 +197,17 @@ class BlinkMorseApp:
             self.detector.reset()
             state.face = False
             state.pose = "open"
-            self._chip_pos = {"left": None, "right": None}
-            self._brow_pos = {"left": None, "right": None}
+            self._tongue = None
         else:
-            for event in self.detector.update(face.left_score, face.right_score, now):
+            score = self._tongue_score(face.tongue)
+            for event in self.detector.update(score, score, now):
                 if not self.paused:
                     self._handle_blink(event, now)
             state.face = True
             state.openness = {"left": 1.0 - self.detector.left.value,
                               "right": 1.0 - self.detector.right.value}
             state.pose = self.detector.pose
-            self._update_chip_positions(face, frame_rgb.shape)
+            self._update_tongue_overlay(face, frame_rgb.shape)
 
         # Pauses end letters and words. Without a face the eyes cannot be
         # blinking, so the time since the last blink keeps counting.
@@ -210,40 +221,32 @@ class BlinkMorseApp:
         elif event.kind == BlinkKind.DASH:
             self._apply_composer(self.composer.add_symbol("-"), now)
 
-    def _update_chip_positions(self, face, shape) -> None:
+    def _tongue_score(self, tongue) -> float:
         """
-        Place each openness readout just outside the eye's outer corner,
-        in window pixels. The position is lightly smoothed so the numbers
-        do not jitter with the landmarks; this has no effect on input.
+        Visible tongue length as a 0..1 score for the press detector: the
+        threshold from the settings maps to 0.5, twice the threshold to 1.
         """
+        if tongue is None or not tongue.out or tongue.length_mm <= 0:
+            return 0.0
+        threshold_mm = max(self.settings.eyes.tongue_cm * 10.0, 1.0)
+        return min(1.0, TONGUE_PRESS * tongue.length_mm / threshold_mm)
+
+    def _update_tongue_overlay(self, face, shape) -> None:
+        """Tongue outline, mouth opening and tip in window pixels."""
         h, w = shape[:2]
         (sx, sy), (ox, oy) = cover_crop((w, h), WINDOW_SIZE)
         W, H = WINDOW_SIZE
 
         def to_screen(p):
-            return np.array([(p[0] - ox) / sx * W, (p[1] - oy) / sy * H])
+            return ((p[0] - ox) / sx * W, (p[1] - oy) / sy * H)
 
-        offset = CHIP_GAP + CHIP_SIZE[0] / 2
-        for side, corners in (("left", face.left_corners),
-                              ("right", face.right_corners)):
-            if corners is None:
-                self._chip_pos[side] = None
-                self._brow_pos[side] = None
-                continue
-            outer, inner = to_screen(corners[0]), to_screen(corners[1])
-            if len(corners) > 2:
-                self._brow_pos[side] = to_screen(corners[2])
-            direction = outer - inner
-            norm = np.linalg.norm(direction)
-            if norm < 1e-3:
-                continue
-            direction /= norm
-            target = outer + direction * offset
-            target[1] = (outer[1] + inner[1]) / 2
-            previous = self._chip_pos[side]
-            if previous is not None:
-                target = previous * 0.5 + target * 0.5
-            self._chip_pos[side] = target
+        t = face.tongue
+        if t is not None and t.out and t.tip is not None:
+            self._tongue = {"contour": [to_screen(p) for p in t.contour],
+                            "lip": to_screen(t.lip), "tip": to_screen(t.tip),
+                            "mm": t.length_mm}
+        else:
+            self._tongue = None
 
     def _apply_composer(self, event, now: float) -> None:
         if event is None:
@@ -304,7 +307,7 @@ class BlinkMorseApp:
     def _apply_eye_setting(self, key: str, value) -> None:
         e = self.settings.eyes
         setattr(e, key, value)
-        self.detector.close_threshold = e.close_threshold
+        self.detector.close_threshold = TONGUE_PRESS
         self.detector.time_unit = e.time_unit
         self.composer.letter_gap = e.letter_gap
         self.composer.word_gap = e.word_gap
@@ -346,7 +349,8 @@ class BlinkMorseApp:
         e = self.settings.eyes
         state.fps = self.fps
         state.camera_error = self.camera.error
-        state.open_threshold = 1.0 - e.close_threshold
+        state.open_threshold = 1.0 - TONGUE_PRESS
+        state.tongue_threshold_mm = e.tongue_cm * 10.0
         state.dash_after = e.dash_after
         state.letter_gap = e.letter_gap
         state.word_gap = e.word_gap
@@ -354,10 +358,14 @@ class BlinkMorseApp:
         state.code = self.composer.code
         state.text = self.composer.text
         state.paused = self.paused
-        state.chips = {side: (None if p is None else (float(p[0]), float(p[1])))
-                       for side, p in self._chip_pos.items()}
-        state.brow_dots = {side: (None if p is None else (float(p[0]), float(p[1])))
-                           for side, p in self._brow_pos.items()}
+        state.chips = {}
+        tg = self._tongue
+        state.tongue_mm = 0.0 if tg is None else float(tg["mm"])
+        state.tongue = None if tg is None else {
+            "contour": [(float(p[0]), float(p[1])) for p in tg["contour"]],
+            "lip": (float(tg["lip"][0]), float(tg["lip"][1])),
+            "tip": (float(tg["tip"][0]), float(tg["tip"][1])),
+            "mm": float(tg["mm"])}
 
         pause = self.detector.pause_time(now)
         kind, progress = self.composer.pause_state(pause)

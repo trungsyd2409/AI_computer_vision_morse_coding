@@ -2,9 +2,10 @@
 Turns two scores per frame into Morse dots and dashes, using the length of
 each "press", the same way a telegraph key uses the length of each press.
 
-The scores are now MediaPipe's brow-raise scores (browInnerUp/OuterUp), so
-a "blink" in this module means "both eyebrows raised" and "open"
-means "brows relaxed". The timing logic is unchanged.
+The input is now the tongue: the app turns the visible tongue length into
+a score (the length threshold from the settings sits at 0.5) and feeds the
+same score as both "eyes". So a "blink" in this module means "tongue out
+past the threshold" and "open" means "tongue in". The timing logic is unchanged.
 
 Signals
 -------

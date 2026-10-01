@@ -31,7 +31,7 @@ FACE_MODEL_URL = (
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Brow Morse"
+APP_TITLE = "Tongue Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -45,15 +45,14 @@ TEXT_MUTED = (150, 160, 178)
 TEXT_FAINT = (98, 108, 126)
 ACCENT = (103, 232, 249)          # cyan, used for the primary highlight
 SUCCESS = (74, 222, 128)
-BROW_DOT = (34, 197, 94)          # small green marker drawn on each eyebrow
 WARNING = (251, 191, 36)
 DANGER = (251, 113, 133)
 
 # One colour per action so the legend, the meters, the typed symbols and
 # the pause countdown all speak the same visual language.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # short brow-raise
-    "dash": (167, 139, 250),      # long brow-raise
+    "dot": (103, 232, 249),       # short tongue out
+    "dash": (167, 139, 250),      # long tongue out
     "letter": (251, 191, 36),     # short pause -> end of letter
     "word": (74, 222, 128),       # long pause  -> space
 }
@@ -88,17 +87,18 @@ class CameraSettings:
 
 @dataclass
 class EyeSettings:
-    """Threshold and timing for reading blinks."""
+    """Threshold and timing for reading the tongue."""
 
-    # Brow-raise is a 0..1 score after removing the user's own resting
-    # level. Above `close_threshold` a brow counts as raised ("pressed").
-    # Adjustable from 5% to 95% in the settings window.
-    close_threshold: float = 0.35
+    # How far the tongue must stick out (cm, measured from the mouth
+    # opening) to count as "pressed". Adjustable in the settings window.
+    tongue_cm: float = 2.0
     # The Morse time unit t, in seconds. Everything is derived from it:
-    # brows up < 1.5 t = dot, >= 1.5 t = dash, relaxed 3 t = end of
-    # letter, relaxed 7 t = end of word.
+    # tongue out < 1.5 t = dot, >= 1.5 t = dash, tongue in 3 t = end of
+    # letter, tongue in 7 t = end of word.
     time_unit: float = 0.10
-    swap_eyes: bool = False           # fixes cameras that mirror the image
+    # No longer used by the tongue input; kept so old settings files load.
+    close_threshold: float = 0.5
+    swap_eyes: bool = False
 
     @property
     def dash_after(self) -> float:
