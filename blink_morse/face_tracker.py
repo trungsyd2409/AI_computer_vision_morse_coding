@@ -2,10 +2,11 @@
 Wrapper around MediaPipe's Face Landmarker (Tasks API).
 
 For every frame MediaPipe returns 478 face landmarks and 52 "blendshape"
-scores that describe the expression. Two of those scores, `eyeBlinkLeft`
-and `eyeBlinkRight`, go from about 0 (eye open) to about 1 (eye closed)
-and drive the whole app. Four landmarks, the corners of each eye, are also
-returned so the HUD can place the openness readout next to each eye.
+scores that describe the expression. Two of those scores, `browDownLeft`
+and `browDownRight`, go from about 0 (brows relaxed) to about 1 (brows
+pulled down in a frown) and drive the whole app: lowering both brows works
+like pressing a telegraph key. Four landmarks, the ends of each eyebrow,
+are also returned so the HUD can place a readout next to each brow.
 
 Which eye is "left"
 -------------------
@@ -25,9 +26,9 @@ import numpy as np
 
 from .config import FACE_MODEL_PATH, FACE_MODEL_URL
 
-# Eye corners (outer, inner), named after the face as shown in the image.
-MP_RIGHT_EYE_CORNERS = (33, 133)
-MP_LEFT_EYE_CORNERS = (263, 362)
+# Eyebrow ends (outer, inner), named after the face as shown in the image.
+MP_RIGHT_EYE_CORNERS = (70, 107)
+MP_LEFT_EYE_CORNERS = (300, 336)
 
 
 def ensure_model(path: Path = FACE_MODEL_PATH, url: str = FACE_MODEL_URL) -> Path:
@@ -46,9 +47,9 @@ def ensure_model(path: Path = FACE_MODEL_PATH, url: str = FACE_MODEL_URL) -> Pat
 class FaceResult:
     """One detected face, from the user's point of view."""
 
-    left_score: float            # raw blink score of the user's left eye
-    right_score: float           # raw blink score of the user's right eye
-    # (outer corner, inner corner) of each eye as normalised (x, y) pairs
+    left_score: float            # raw brow-down score of the user's left brow
+    right_score: float           # raw brow-down score of the user's right brow
+    # (outer end, inner end) of each eyebrow as normalised (x, y) pairs
     left_corners: Optional[tuple] = None
     right_corners: Optional[tuple] = None
 
@@ -100,8 +101,8 @@ class FaceTracker:
                 return tuple((lm[i].x, lm[i].y) for i in ids)
 
             corners = (pair(MP_LEFT_EYE_CORNERS), pair(MP_RIGHT_EYE_CORNERS))
-        return build_result(scores.get("eyeBlinkLeft", 0.0),
-                            scores.get("eyeBlinkRight", 0.0), mirrored, swap_eyes,
+        return build_result(scores.get("browDownLeft", 0.0),
+                            scores.get("browDownRight", 0.0), mirrored, swap_eyes,
                             corners)
 
     def close(self) -> None:

@@ -1,5 +1,6 @@
 """
-Blink Morse - type Morse code with your eyes in front of a webcam.
+Brow Morse - type Morse code by lowering your eyebrows (frowning) in front
+of a webcam. Short frown = dot, long frown = dash.
 
 Run:  python main.py
 Keys: X settings, Z hide UI, P pause listening, H toggle chart, M mute,

@@ -1,7 +1,10 @@
 """
-Turns two eye-closure scores per frame into Morse dots and dashes, using
-the length of each blink, the same way a telegraph key uses the length of
-each press.
+Turns two scores per frame into Morse dots and dashes, using the length of
+each "press", the same way a telegraph key uses the length of each press.
+
+The scores are now MediaPipe's brow-down scores (browDownLeft/Right), so a
+"blink" in this module means "both eyebrows lowered" (a frown) and "open"
+means "brows relaxed". The timing logic is unchanged.
 
 Signals
 -------

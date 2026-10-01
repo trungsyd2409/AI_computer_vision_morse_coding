@@ -298,7 +298,7 @@ class Hud:
 
     def _draw_title(self, state: HudState) -> None:
         r = self.rect_title
-        self.blit(self.text("semibold", 17, "Blink Morse", TEXT), (r.x + 16, r.y + 10))
+        self.blit(self.text("semibold", 17, "Brow Morse", TEXT), (r.x + 16, r.y + 10))
 
         if state.camera_error:
             dot, msg = DANGER, "Camera unavailable"
@@ -319,10 +319,10 @@ class Hud:
         def sec(v):
             return f"{round(v, 2):g} s"
         return [
-            ("dot", "Short blink", f"< {sec(state.dash_after)}  \u00b7"),
-            ("dash", "Long blink", f"\u2265 {sec(state.dash_after)}  \u2013"),
-            ("letter", f"Open {sec(state.letter_gap)}", "end letter"),
-            ("word", f"Open {sec(state.word_gap)}", "space"),
+            ("dot", "Short frown", f"< {sec(state.dash_after)}  \u00b7"),
+            ("dash", "Long frown", f"\u2265 {sec(state.dash_after)}  \u2013"),
+            ("letter", f"Relax {sec(state.letter_gap)}", "end letter"),
+            ("word", f"Relax {sec(state.word_gap)}", "space"),
         ]
 
     def _draw_legend(self, state: HudState, now: float) -> None:
@@ -350,7 +350,7 @@ class Hud:
     def _draw_meters(self, state: HudState) -> None:
         """Two bars showing how open each eye is, with the threshold marked."""
         r = self.rect_meters
-        self.blit(self.label("Eye openness"), (r.x + 16, r.y + 12))
+        self.blit(self.label("Brow (relaxed)"), (r.x + 16, r.y + 12))
         x0, x1 = r.x + 62, r.right - 62
         for i, side in enumerate(("right", "left")):
             cy = r.y + 40 + i * 24
@@ -372,7 +372,7 @@ class Hud:
             tx = x0 + track.w * state.open_threshold
             draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
 
-            status = "closed" if closed else f"{round(value * 100)}%"
+            status = "down" if closed else f"{round(value * 100)}%"
             self.blit(self.text("regular", 11, status, color if closed else TEXT_MUTED),
                       (r.right - 14, cy), "midright")
 
@@ -489,7 +489,7 @@ class Hud:
                                 WARNING), (x0, cy), "midleft")
         else:
             self.blit(self.text("regular", 14,
-                                "Short blink for a dot, long blink for a dash",
+                                "Short frown for a dot, long frown for a dash",
                                 TEXT_FAINT), (x0 + shake, cy), "midleft")
 
         # Divider
@@ -593,7 +593,7 @@ class Hud:
 
         left = right - 56
         if char is not None:
-            self.blit(self.text("regular", 12, "keep eyes open to confirm", TEXT_MUTED),
+            self.blit(self.text("regular", 12, "relax brows to confirm", TEXT_MUTED),
                       (left, cy), "midright")
         elif options:
             preview = "  ".join(options[:6]) + ("  \u2026" if len(options) > 6 else "")

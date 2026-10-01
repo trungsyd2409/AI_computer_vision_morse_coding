@@ -31,7 +31,7 @@ FACE_MODEL_URL = (
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Blink Morse"
+APP_TITLE = "Brow Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -51,8 +51,8 @@ DANGER = (251, 113, 133)
 # One colour per action so the legend, the meters, the typed symbols and
 # the pause countdown all speak the same visual language.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # short blink
-    "dash": (167, 139, 250),      # long blink
+    "dot": (103, 232, 249),       # short brow-down
+    "dash": (167, 139, 250),      # long brow-down
     "letter": (251, 191, 36),     # short pause -> end of letter
     "word": (74, 222, 128),       # long pause  -> space
 }
@@ -89,12 +89,13 @@ class CameraSettings:
 class EyeSettings:
     """Threshold and timing for reading blinks."""
 
-    # Eye closure is a 0..1 score after removing the user's own resting
-    # level. Above `close_threshold` an eye counts as closed.
-    close_threshold: float = 0.45
+    # Brow-down is a 0..1 score after removing the user's own resting
+    # level. Above `close_threshold` a brow counts as lowered ("pressed").
+    # Brow scores are weaker than blink scores, so the default is lower.
+    close_threshold: float = 0.35
     # The Morse time unit t, in seconds. Everything is derived from it:
-    # blink < 1.5 t = dot, >= 1.5 t = dash, open 3 t = end of letter,
-    # open 7 t = end of word.
+    # brows down < 1.5 t = dot, >= 1.5 t = dash, relaxed 3 t = end of
+    # letter, relaxed 7 t = end of word.
     time_unit: float = 0.10
     swap_eyes: bool = False           # fixes cameras that mirror the image
 
