@@ -2,8 +2,8 @@
 Turns two scores per frame into Morse dots and dashes, using the length of
 each "press", the same way a telegraph key uses the length of each press.
 
-The scores are now MediaPipe's brow-down scores (browDownLeft/Right), so a
-"blink" in this module means "both eyebrows lowered" (a frown) and "open"
+The scores are now MediaPipe's brow-raise scores (browInnerUp/OuterUp), so
+a "blink" in this module means "both eyebrows raised" and "open"
 means "brows relaxed". The timing logic is unchanged.
 
 Signals
@@ -179,7 +179,11 @@ class BlinkDetector:
 
     def _hysteresis(self, value: float, was_closed: bool) -> bool:
         if was_closed:
-            return value > self.close_threshold - self.RELEASE_GAP
+            # With very low thresholds (down to 5%) a fixed gap would put the
+            # release level below zero and the press would never end, so the
+            # gap is capped at half the threshold.
+            gap = min(self.RELEASE_GAP, self.close_threshold * 0.5)
+            return value > self.close_threshold - gap
         return value > self.close_threshold
 
     def _classify(self) -> str:

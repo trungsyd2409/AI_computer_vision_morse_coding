@@ -23,7 +23,7 @@ import pygame
 
 from . import draw
 from .config import (ACCENT, ACTION_COLORS, DANGER, FONTS_DIR, MIN_ACCEPTABLE_FPS,
-                     SUCCESS, TEXT, TEXT_FAINT, TEXT_MUTED, WARNING)
+                     BROW_DOT, SUCCESS, TEXT, TEXT_FAINT, TEXT_MUTED, WARNING)
 from .morse import MORSE_TABLE, candidates, decode
 
 # Characters shown in the reference chart, laid out column by column.
@@ -55,6 +55,8 @@ class HudState:
     openness: dict = field(default_factory=lambda: {"left": 1.0, "right": 1.0})
     # Screen position of the readout next to each eye, or None
     chips: dict = field(default_factory=dict)
+    # Screen position of the middle of each eyebrow (green marker), or None
+    brow_dots: dict = field(default_factory=dict)
     open_threshold: float = 0.55         # below this an eye counts as closed
     pose: str = "open"                   # open / left / right / both
     closed_time: float = 0.0             # length of the current blink so far
@@ -184,6 +186,7 @@ class Hud:
             return
         self._build_panels(state, now)
         self._draw_eye_chips(state)
+        self._draw_brow_dots(state)
 
         self._draw_title(state)
         self._draw_legend(state, now)
@@ -296,6 +299,16 @@ class Hud:
                               color if closed else TEXT)
             self.blit(label, (rect.right - 10, rect.centery), "midright")
 
+    def _draw_brow_dots(self, state: HudState) -> None:
+        """A small green dot in the middle of each eyebrow."""
+        if not state.face:
+            return
+        for centre in state.brow_dots.values():
+            if centre is None:
+                continue
+            draw.circle(self.ui, BROW_DOT, centre, 4)
+            draw.glow(self.glow, BROW_DOT, centre, 8, 0.5)
+
     def _draw_title(self, state: HudState) -> None:
         r = self.rect_title
         self.blit(self.text("semibold", 17, "Brow Morse", TEXT), (r.x + 16, r.y + 10))
@@ -319,8 +332,8 @@ class Hud:
         def sec(v):
             return f"{round(v, 2):g} s"
         return [
-            ("dot", "Short frown", f"< {sec(state.dash_after)}  \u00b7"),
-            ("dash", "Long frown", f"\u2265 {sec(state.dash_after)}  \u2013"),
+            ("dot", "Short raise", f"< {sec(state.dash_after)}  \u00b7"),
+            ("dash", "Long raise", f"\u2265 {sec(state.dash_after)}  \u2013"),
             ("letter", f"Relax {sec(state.letter_gap)}", "end letter"),
             ("word", f"Relax {sec(state.word_gap)}", "space"),
         ]
@@ -372,7 +385,7 @@ class Hud:
             tx = x0 + track.w * state.open_threshold
             draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
 
-            status = "down" if closed else f"{round(value * 100)}%"
+            status = "up" if closed else f"{round(value * 100)}%"
             self.blit(self.text("regular", 11, status, color if closed else TEXT_MUTED),
                       (r.right - 14, cy), "midright")
 
@@ -489,7 +502,7 @@ class Hud:
                                 WARNING), (x0, cy), "midleft")
         else:
             self.blit(self.text("regular", 14,
-                                "Short frown for a dot, long frown for a dash",
+                                "Short brow raise for a dot, long raise for a dash",
                                 TEXT_FAINT), (x0 + shake, cy), "midleft")
 
         # Divider

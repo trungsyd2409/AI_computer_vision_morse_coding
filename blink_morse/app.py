@@ -81,6 +81,7 @@ class BlinkMorseApp:
         self._props_sent = False
         self._state = HudState()
         self._chip_pos = {"left": None, "right": None}
+        self._brow_pos = {"left": None, "right": None}
 
     # ------------------------------------------------------------------------
 
@@ -158,6 +159,7 @@ class BlinkMorseApp:
         state.face = False
         state.pose = "open"
         self._chip_pos = {"left": None, "right": None}
+        self._brow_pos = {"left": None, "right": None}
         # Start timing afresh, so time spent with the UI hidden is not
         # counted as a pause that ends the letter.
         self.detector.reset(time.perf_counter())
@@ -185,6 +187,7 @@ class BlinkMorseApp:
             state.face = False
             state.pose = "open"
             self._chip_pos = {"left": None, "right": None}
+            self._brow_pos = {"left": None, "right": None}
         else:
             for event in self.detector.update(face.left_score, face.right_score, now):
                 if not self.paused:
@@ -225,8 +228,11 @@ class BlinkMorseApp:
                               ("right", face.right_corners)):
             if corners is None:
                 self._chip_pos[side] = None
+                self._brow_pos[side] = None
                 continue
             outer, inner = to_screen(corners[0]), to_screen(corners[1])
+            if len(corners) > 2:
+                self._brow_pos[side] = to_screen(corners[2])
             direction = outer - inner
             norm = np.linalg.norm(direction)
             if norm < 1e-3:
@@ -350,6 +356,8 @@ class BlinkMorseApp:
         state.paused = self.paused
         state.chips = {side: (None if p is None else (float(p[0]), float(p[1])))
                        for side, p in self._chip_pos.items()}
+        state.brow_dots = {side: (None if p is None else (float(p[0]), float(p[1])))
+                           for side, p in self._brow_pos.items()}
 
         pause = self.detector.pause_time(now)
         kind, progress = self.composer.pause_state(pause)

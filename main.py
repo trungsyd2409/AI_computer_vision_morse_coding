@@ -1,6 +1,6 @@
 """
-Brow Morse - type Morse code by lowering your eyebrows (frowning) in front
-of a webcam. Short frown = dot, long frown = dash.
+Brow Morse - type Morse code by raising your eyebrows in front
+of a webcam. Short raise = dot, long raise = dash.
 
 Run:  python main.py
 Keys: X settings, Z hide UI, P pause listening, H toggle chart, M mute,

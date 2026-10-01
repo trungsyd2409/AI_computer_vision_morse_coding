@@ -2,11 +2,13 @@
 Wrapper around MediaPipe's Face Landmarker (Tasks API).
 
 For every frame MediaPipe returns 478 face landmarks and 52 "blendshape"
-scores that describe the expression. Two of those scores, `browDownLeft`
-and `browDownRight`, go from about 0 (brows relaxed) to about 1 (brows
-pulled down in a frown) and drive the whole app: lowering both brows works
-like pressing a telegraph key. Four landmarks, the ends of each eyebrow,
-are also returned so the HUD can place a readout next to each brow.
+scores that describe the expression. The brow-raise scores drive the whole
+app: `browInnerUp` (shared by both brows) and `browOuterUpLeft/Right`. Each
+brow's score is the larger of the inner and its own outer score, from about
+0 (brows relaxed) to about 1 (brows raised high). Raising both brows works
+like pressing a telegraph key. The ends and middle of each eyebrow are also
+returned so the HUD can place a readout next to each brow and a small dot
+on it.
 
 Which eye is "left"
 -------------------
@@ -29,6 +31,9 @@ from .config import FACE_MODEL_PATH, FACE_MODEL_URL
 # Eyebrow ends (outer, inner), named after the face as shown in the image.
 MP_RIGHT_EYE_CORNERS = (70, 107)
 MP_LEFT_EYE_CORNERS = (300, 336)
+# Middle of each eyebrow: (upper edge, lower edge), averaged into one point.
+MP_RIGHT_BROW_MIDDLE = (105, 52)
+MP_LEFT_BROW_MIDDLE = (334, 282)
 
 
 def ensure_model(path: Path = FACE_MODEL_PATH, url: str = FACE_MODEL_URL) -> Path:
@@ -47,9 +52,9 @@ def ensure_model(path: Path = FACE_MODEL_PATH, url: str = FACE_MODEL_URL) -> Pat
 class FaceResult:
     """One detected face, from the user's point of view."""
 
-    left_score: float            # raw brow-down score of the user's left brow
-    right_score: float           # raw brow-down score of the user's right brow
-    # (outer end, inner end) of each eyebrow as normalised (x, y) pairs
+    left_score: float            # raw brow-raise score of the user's left brow
+    right_score: float           # raw brow-raise score of the user's right brow
+    # (outer end, inner end, middle) of each eyebrow as normalised (x, y) pairs
     left_corners: Optional[tuple] = None
     right_corners: Optional[tuple] = None
 
@@ -97,13 +102,17 @@ class FaceTracker:
         if result.face_landmarks:
             lm = result.face_landmarks[0]
 
-            def pair(ids):
-                return tuple((lm[i].x, lm[i].y) for i in ids)
+            def points(ends, middle):
+                a, b = lm[middle[0]], lm[middle[1]]
+                mid = ((a.x + b.x) / 2, (a.y + b.y) / 2)
+                return tuple((lm[i].x, lm[i].y) for i in ends) + (mid,)
 
-            corners = (pair(MP_LEFT_EYE_CORNERS), pair(MP_RIGHT_EYE_CORNERS))
-        return build_result(scores.get("browDownLeft", 0.0),
-                            scores.get("browDownRight", 0.0), mirrored, swap_eyes,
-                            corners)
+            corners = (points(MP_LEFT_EYE_CORNERS, MP_LEFT_BROW_MIDDLE),
+                       points(MP_RIGHT_EYE_CORNERS, MP_RIGHT_BROW_MIDDLE))
+        inner = scores.get("browInnerUp", 0.0)
+        return build_result(max(inner, scores.get("browOuterUpLeft", 0.0)),
+                            max(inner, scores.get("browOuterUpRight", 0.0)),
+                            mirrored, swap_eyes, corners)
 
     def close(self) -> None:
         self._landmarker.close()

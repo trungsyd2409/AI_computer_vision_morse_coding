@@ -187,8 +187,8 @@ class SettingsWindow:
                 Slider("Gain", "camera", "gain", cam["gain"], 0, 255, 1, "{:.0f}"),
             ]),
             "eyes": page([
-                Slider("Brow-down threshold", "eyes", "close_threshold",
-                       eyes["close_threshold"], 0.15, 0.75, 0.01, "{:.2f}"),
+                Slider("Brow-raise threshold", "eyes", "close_threshold",
+                       eyes["close_threshold"], 0.05, 0.95, 0.01, "{:.2f}"),
                 Slider("Time unit t", "eyes", "time_unit",
                        eyes["time_unit"], 0.05, 0.50, 0.01, "{:.2f} s"),
                 Toggle("Swap left / right brow", "eyes", "swap_eyes", eyes["swap_eyes"]),
@@ -364,8 +364,8 @@ class SettingsWindow:
         s.blit(self._label("Timing"), (card.x + 16, card.y + 14))
 
         rows = [
-            (ACTION_COLORS["dot"], "Dot", f"brows down shorter than {1.5 * t:.2f} s"),
-            (ACTION_COLORS["dash"], "Dash", f"brows down {1.5 * t:.2f} s or longer"),
+            (ACTION_COLORS["dot"], "Dot", f"brows up shorter than {1.5 * t:.2f} s"),
+            (ACTION_COLORS["dash"], "Dash", f"brows up {1.5 * t:.2f} s or longer"),
             (ACTION_COLORS["letter"], "End letter", f"brows relaxed {3 * t:.2f} s"),
             (ACTION_COLORS["word"], "Space", f"brows relaxed {7 * t:.2f} s"),
         ]
