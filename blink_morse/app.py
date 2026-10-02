@@ -243,7 +243,7 @@ class BlinkMorseApp:
         return min(1.0, max(0.0, PRESS_SCORE * nostril.flare / threshold))
 
     def _update_nostril_overlay(self, face, shape) -> None:
-        """Nostril outlines and the measured patch in window pixels."""
+        """Nostril ovals and the dark area inside them, in window pixels."""
         h, w = shape[:2]
         (sx, sy), (ox, oy) = cover_crop((w, h), WINDOW_SIZE)
         W, H = WINDOW_SIZE
@@ -257,7 +257,7 @@ class BlinkMorseApp:
             return
         self._nostril = {
             "contours": [[to_screen(p) for p in c] for c in n.contours],
-            "box": [to_screen(p) for p in n.box],
+            "ovals": [[to_screen(p) for p in o] for o in n.ovals],
             "flare": n.flare,
             "calibrating": n.calibrating,
             "tilted": n.tilted,

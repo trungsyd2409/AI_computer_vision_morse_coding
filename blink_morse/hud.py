@@ -288,14 +288,16 @@ class Hud:
     # ------------------------------------------------------------------------
 
     def _draw_nostrils(self, state: HudState) -> None:
-        """Outline of the dark nostril area and a faint frame around the patch."""
+        """The two nostril ovals and the dark area counted inside them."""
         n = state.nostril
         if not n or not state.face:
             return
         pressed = state.pose == "both"
         color = self._eye_color(state) if pressed else NOSTRIL_COLOR
-        if len(n["box"]) == 4:
-            pygame.draw.aalines(self.ui, (255, 255, 255, 60), True, n["box"])
+        oval_color = (255, 255, 255, 110) if n["calibrating"] else draw.with_alpha(color, 0.8)
+        for o in n["ovals"]:
+            if len(o) >= 3:
+                pygame.draw.aalines(self.ui, oval_color, True, o)
         for c in n["contours"]:
             if len(c) >= 3:
                 pygame.draw.aalines(self.ui, color, True, c)
@@ -375,7 +377,7 @@ class Hud:
             draw.glow(self.glow, color, (fill.right - 3, cy), 16, 0.7)
         tx = x0 + track.w / 2
         draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
-        self.blit(self.text("mono", 13, f"+{round(flare * 100)}%",
+        self.blit(self.text("mono", 13, f"+{min(999, round(flare * 100))}%",
                             color if pressed else TEXT), (r.right - 14, cy), "midright")
 
         if not n:
