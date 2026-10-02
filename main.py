@@ -1,6 +1,7 @@
 """
-Tongue Morse - type Morse code by sticking your tongue out in front of a
-webcam. Short = dot, long = dash; the length that counts is set with X.
+Nostril Morse - type Morse code by flaring your nostrils in front of a
+webcam. Short flare = dot, long flare = dash; the threshold is set with X.
+C recalibrates the resting nostril size, L logs measurements to logs/*.csv.
 
 Run:  python main.py
 Keys: X settings, Z hide UI, P pause listening, H toggle chart, M mute,

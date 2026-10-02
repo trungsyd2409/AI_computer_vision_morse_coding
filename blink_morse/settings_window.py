@@ -1,5 +1,5 @@
 """
-Settings window with two tabs: Camera and Tongue.
+Settings window with two tabs: Camera and Nostrils.
 
 It runs in a separate process with its own pygame window. The main window
 uses an OpenGL context, and a second window in the same process would
@@ -26,7 +26,7 @@ from .config import (ACCENT, ACTION_COLORS, DANGER, FPS_CHOICES, MIN_ACCEPTABLE_
 
 ROW_H = 32
 PAD = 24
-TABS = [("Camera", "camera"), ("Tongue", "eyes")]
+TABS = [("Camera", "camera"), ("Nostrils", "eyes")]
 
 
 def list_camera_names() -> list:
@@ -187,8 +187,8 @@ class SettingsWindow:
                 Slider("Gain", "camera", "gain", cam["gain"], 0, 255, 1, "{:.0f}"),
             ]),
             "eyes": page([
-                Slider("Tongue length", "eyes", "tongue_cm",
-                       eyes["tongue_cm"], 0.5, 6.0, 0.1, "{:.1f} cm"),
+                Slider("Flare threshold", "eyes", "flare_pct",
+                       eyes["flare_pct"], 10, 150, 5, "+{:.0f} %"),
                 Slider("Time unit t", "eyes", "time_unit",
                        eyes["time_unit"], 0.05, 0.50, 0.01, "{:.2f} s"),
             ]),
@@ -363,10 +363,10 @@ class SettingsWindow:
         s.blit(self._label("Timing"), (card.x + 16, card.y + 14))
 
         rows = [
-            (ACTION_COLORS["dot"], "Dot", f"tongue out shorter than {1.5 * t:.2f} s"),
-            (ACTION_COLORS["dash"], "Dash", f"tongue out {1.5 * t:.2f} s or longer"),
-            (ACTION_COLORS["letter"], "End letter", f"tongue in {3 * t:.2f} s"),
-            (ACTION_COLORS["word"], "Space", f"tongue in {7 * t:.2f} s"),
+            (ACTION_COLORS["dot"], "Dot", f"flared shorter than {1.5 * t:.2f} s"),
+            (ACTION_COLORS["dash"], "Dash", f"flared {1.5 * t:.2f} s or longer"),
+            (ACTION_COLORS["letter"], "End letter", f"relaxed {3 * t:.2f} s"),
+            (ACTION_COLORS["word"], "Space", f"relaxed {7 * t:.2f} s"),
         ]
         for i, (color, name, rule) in enumerate(rows):
             cy = card.y + 46 + i * 24

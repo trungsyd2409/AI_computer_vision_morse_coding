@@ -31,7 +31,7 @@ FACE_MODEL_URL = (
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Tongue Morse"
+APP_TITLE = "Nostril Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -51,8 +51,8 @@ DANGER = (251, 113, 133)
 # One colour per action so the legend, the meters, the typed symbols and
 # the pause countdown all speak the same visual language.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # short tongue out
-    "dash": (167, 139, 250),      # long tongue out
+    "dot": (103, 232, 249),       # short nostril flare
+    "dash": (167, 139, 250),      # long nostril flare
     "letter": (251, 191, 36),     # short pause -> end of letter
     "word": (74, 222, 128),       # long pause  -> space
 }
@@ -87,16 +87,16 @@ class CameraSettings:
 
 @dataclass
 class EyeSettings:
-    """Threshold and timing for reading the tongue."""
+    """Threshold and timing for reading the nostrils."""
 
-    # How far the tongue must stick out (cm, measured from the mouth
-    # opening) to count as "pressed". Adjustable in the settings window.
-    tongue_cm: float = 2.0
+    # How much bigger (in %) the dark nostril area must be than at rest to
+    # count as "pressed". Adjustable in the settings window.
+    flare_pct: float = 40.0
     # The Morse time unit t, in seconds. Everything is derived from it:
-    # tongue out < 1.5 t = dot, >= 1.5 t = dash, tongue in 3 t = end of
-    # letter, tongue in 7 t = end of word.
+    # flared < 1.5 t = dot, >= 1.5 t = dash, relaxed 3 t = end of
+    # letter, relaxed 7 t = end of word.
     time_unit: float = 0.10
-    # No longer used by the tongue input; kept so old settings files load.
+    # No longer used by the nostril input; kept so old settings files load.
     close_threshold: float = 0.5
     swap_eyes: bool = False
 

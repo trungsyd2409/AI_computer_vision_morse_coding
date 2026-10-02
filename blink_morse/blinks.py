@@ -2,10 +2,11 @@
 Turns two scores per frame into Morse dots and dashes, using the length of
 each "press", the same way a telegraph key uses the length of each press.
 
-The input is now the tongue: the app turns the visible tongue length into
-a score (the length threshold from the settings sits at 0.5) and feeds the
-same score as both "eyes". So a "blink" in this module means "tongue out
-past the threshold" and "open" means "tongue in". The timing logic is unchanged.
+The input is now the nostrils: the app turns the nostril flare (dark area
+compared with rest, see nostril.py) into a score (the threshold from the
+settings sits at 0.5) and feeds the same score as both "eyes". So a
+"blink" in this module means "nostrils flared past the threshold" and
+"open" means "nose relaxed". The timing logic is unchanged.
 
 Signals
 -------

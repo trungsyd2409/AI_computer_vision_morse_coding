@@ -3,11 +3,11 @@ Application loop: camera -> face tracking -> blinks -> Morse -> screen.
 
 Per frame:
   1. Take the newest camera frame (the camera runs in its own thread).
-  2. Mirror it, run MediaPipe for the face landmarks and measure how far
-     the tongue sticks out (tongue.py).
-  3. Turn that length into a score (the length threshold from the settings
-     is the "pressed" point) and feed it to the press detector, which times
-     each press: tongue out short = dot, long = dash.
+  2. Mirror it, run MediaPipe for the face landmarks and head pose, and
+     measure the dark area of the nostrils (nostril.py).
+  3. Turn the flare into a score (the threshold from the settings is the
+     "pressed" point) and feed it to the press detector, which times each
+     press: short flare = dot, long flare = dash.
   4. Let the Morse composer turn pauses into letters and spaces.
 
 Pressing Z hides the whole interface, shows the untouched camera image and
@@ -19,6 +19,7 @@ its sound played in the same frame the blink is recognised, before any
 drawing happens.
 """
 
+import csv
 import time
 
 import cv2
@@ -30,15 +31,16 @@ from .audio import SoundBank
 from .blinks import BlinkDetector, BlinkKind
 from .camera import CameraStream
 from .compositor import Compositor, cover_crop
-from .config import APP_TITLE, WINDOW_SIZE, AppSettings, CameraSettings, EyeSettings
+from .config import APP_TITLE, ROOT_DIR, WINDOW_SIZE, AppSettings, CameraSettings, EyeSettings
 from .face_tracker import FaceTracker
-
-# Score (0..1) at which the tongue counts as "pressed": the length
-# threshold from the settings is mapped onto this value.
-TONGUE_PRESS = 0.5
 from .hud import Hud, HudState
 from .morse import EventKind, MorseComposer
 from .settings_window import SettingsLink
+
+# Score (0..1) at which the nostrils count as "pressed": the flare threshold
+# from the settings is mapped onto this value.
+PRESS_SCORE = 0.5
+LOG_DIR = ROOT_DIR / "logs"
 
 
 class BlinkMorseApp:
@@ -72,12 +74,11 @@ class BlinkMorseApp:
         self.camera.start()
 
         e = self.settings.eyes
-        # The tongue length is turned into a 0..1 score where the threshold
-        # from the settings sits exactly at 0.5 (see _tongue_score).
-        self.detector = BlinkDetector(TONGUE_PRESS, e.time_unit)
+        # The nostril flare is turned into a 0..1 score where the threshold
+        # from the settings sits exactly at 0.5 (see _flare_score).
+        self.detector = BlinkDetector(PRESS_SCORE, e.time_unit)
         for signal in (self.detector.left, self.detector.right):
-            # A tongue that is in has a score of exactly 0, so there is no
-            # resting level to learn.
+            # The nostril detector already removes the resting level.
             signal.baseline = 0.0
             signal.MAX_BASELINE = 0.0
         self.composer = MorseComposer(e.letter_gap, e.word_gap)
@@ -93,7 +94,9 @@ class BlinkMorseApp:
         self._last_stats = 0.0
         self._props_sent = False
         self._state = HudState()
-        self._tongue = None
+        self._nostril = None
+        self._log_file = None
+        self._log_writer = None
 
     # ------------------------------------------------------------------------
 
@@ -125,6 +128,8 @@ class BlinkMorseApp:
             self.shutdown()
 
     def shutdown(self) -> None:
+        if self._log_file is not None:
+            self._log_file.close()
         self.settings_link.close()
         self.camera.stop()
         self.tracker.close()
@@ -163,6 +168,11 @@ class BlinkMorseApp:
                 self._apply_composer(self.composer.delete(), time.perf_counter())
             elif event.key == pygame.K_DELETE:
                 self._apply_composer(self.composer.clear(), time.perf_counter())
+            elif event.key == pygame.K_c:
+                self.tracker.recalibrate()
+                self.detector.reset(time.perf_counter())
+            elif event.key == pygame.K_l:
+                self._toggle_logging()
         return True
 
     def _toggle_ui(self) -> None:
@@ -170,7 +180,7 @@ class BlinkMorseApp:
         state = self._state
         state.face = False
         state.pose = "open"
-        self._tongue = None
+        self._nostril = None
         # Start timing afresh, so time spent with the UI hidden is not
         # counted as a pause that ends the letter.
         self.detector.reset(time.perf_counter())
@@ -197,9 +207,10 @@ class BlinkMorseApp:
             self.detector.reset()
             state.face = False
             state.pose = "open"
-            self._tongue = None
+            self._nostril = None
         else:
-            score = self._tongue_score(face.tongue)
+            score = self._flare_score(face.nostril)
+            self._log(face.nostril, now)
             for event in self.detector.update(score, score, now):
                 if not self.paused:
                     self._handle_blink(event, now)
@@ -207,7 +218,7 @@ class BlinkMorseApp:
             state.openness = {"left": 1.0 - self.detector.left.value,
                               "right": 1.0 - self.detector.right.value}
             state.pose = self.detector.pose
-            self._update_tongue_overlay(face, frame_rgb.shape)
+            self._update_nostril_overlay(face, frame_rgb.shape)
 
         # Pauses end letters and words. Without a face the eyes cannot be
         # blinking, so the time since the last blink keeps counting.
@@ -221,32 +232,63 @@ class BlinkMorseApp:
         elif event.kind == BlinkKind.DASH:
             self._apply_composer(self.composer.add_symbol("-"), now)
 
-    def _tongue_score(self, tongue) -> float:
+    def _flare_score(self, nostril) -> float:
         """
-        Visible tongue length as a 0..1 score for the press detector: the
-        threshold from the settings maps to 0.5, twice the threshold to 1.
+        Nostril flare as a 0..1 score for the press detector: the threshold
+        from the settings maps to 0.5, twice the threshold to 1.
         """
-        if tongue is None or not tongue.out or tongue.length_mm <= 0:
+        if nostril is None or not nostril.ok or nostril.calibrating or nostril.tilted:
             return 0.0
-        threshold_mm = max(self.settings.eyes.tongue_cm * 10.0, 1.0)
-        return min(1.0, TONGUE_PRESS * tongue.length_mm / threshold_mm)
+        threshold = max(self.settings.eyes.flare_pct / 100.0, 0.01)
+        return min(1.0, max(0.0, PRESS_SCORE * nostril.flare / threshold))
 
-    def _update_tongue_overlay(self, face, shape) -> None:
-        """Tongue outline, mouth opening and tip in window pixels."""
+    def _update_nostril_overlay(self, face, shape) -> None:
+        """Nostril outlines and the measured patch in window pixels."""
         h, w = shape[:2]
         (sx, sy), (ox, oy) = cover_crop((w, h), WINDOW_SIZE)
         W, H = WINDOW_SIZE
 
         def to_screen(p):
-            return ((p[0] - ox) / sx * W, (p[1] - oy) / sy * H)
+            return (float((p[0] - ox) / sx * W), float((p[1] - oy) / sy * H))
 
-        t = face.tongue
-        if t is not None and t.out and t.tip is not None:
-            self._tongue = {"contour": [to_screen(p) for p in t.contour],
-                            "lip": to_screen(t.lip), "tip": to_screen(t.tip),
-                            "mm": t.length_mm}
-        else:
-            self._tongue = None
+        n = face.nostril
+        if n is None or not n.ok:
+            self._nostril = None
+            return
+        self._nostril = {
+            "contours": [[to_screen(p) for p in c] for c in n.contours],
+            "box": [to_screen(p) for p in n.box],
+            "flare": n.flare,
+            "calibrating": n.calibrating,
+            "tilted": n.tilted,
+        }
+
+    # ------------------------------------------------------------------------
+    # Data logging (L key): one CSV row per frame, for analysis later
+    # ------------------------------------------------------------------------
+
+    def _toggle_logging(self) -> None:
+        if self._log_file is not None:
+            self._log_file.close()
+            self._log_file = self._log_writer = None
+            print("Logging stopped")
+            return
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        path = LOG_DIR / time.strftime("nostril_%Y%m%d_%H%M%S.csv")
+        self._log_file = open(path, "w", newline="")
+        self._log_writer = csv.writer(self._log_file)
+        self._log_writer.writerow(["time", "ratio_left", "ratio_right", "rest_left",
+                                   "rest_right", "flare", "pitch", "calibrating",
+                                   "tilted", "pressed"])
+        print(f"Logging to {path}")
+
+    def _log(self, n, now: float) -> None:
+        if self._log_writer is None or n is None:
+            return
+        self._log_writer.writerow([
+            f"{now - self._start:.3f}", f"{n.ratio[0]:.4f}", f"{n.ratio[1]:.4f}",
+            f"{n.rest[0]:.4f}", f"{n.rest[1]:.4f}", f"{n.flare:.4f}", f"{n.pitch:.2f}",
+            int(n.calibrating), int(n.tilted), int(self.detector.pose == "both")])
 
     def _apply_composer(self, event, now: float) -> None:
         if event is None:
@@ -307,7 +349,7 @@ class BlinkMorseApp:
     def _apply_eye_setting(self, key: str, value) -> None:
         e = self.settings.eyes
         setattr(e, key, value)
-        self.detector.close_threshold = TONGUE_PRESS
+        self.detector.close_threshold = PRESS_SCORE
         self.detector.time_unit = e.time_unit
         self.composer.letter_gap = e.letter_gap
         self.composer.word_gap = e.word_gap
@@ -349,8 +391,8 @@ class BlinkMorseApp:
         e = self.settings.eyes
         state.fps = self.fps
         state.camera_error = self.camera.error
-        state.open_threshold = 1.0 - TONGUE_PRESS
-        state.tongue_threshold_mm = e.tongue_cm * 10.0
+        state.open_threshold = 1.0 - PRESS_SCORE
+        state.flare_threshold = e.flare_pct / 100.0
         state.dash_after = e.dash_after
         state.letter_gap = e.letter_gap
         state.word_gap = e.word_gap
@@ -359,13 +401,7 @@ class BlinkMorseApp:
         state.text = self.composer.text
         state.paused = self.paused
         state.chips = {}
-        tg = self._tongue
-        state.tongue_mm = 0.0 if tg is None else float(tg["mm"])
-        state.tongue = None if tg is None else {
-            "contour": [(float(p[0]), float(p[1])) for p in tg["contour"]],
-            "lip": (float(tg["lip"][0]), float(tg["lip"][1])),
-            "tip": (float(tg["tip"][0]), float(tg["tip"][1])),
-            "mm": float(tg["mm"])}
+        state.nostril = self._nostril
 
         pause = self.detector.pause_time(now)
         kind, progress = self.composer.pause_state(pause)
