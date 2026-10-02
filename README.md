@@ -1,6 +1,6 @@
 # Morse Hand
 
-Type Morse code in the air with your right hand. A webcam watches your fingers, each thumb touch becomes a dot, a dash or a command, and the decoded letters appear on screen as you go.
+Type Morse code in the air with your right hand. A webcam watches your index and middle fingers: touching their tips together works like a telegraph key. A short touch is a dot, a long touch is a dash, and the pauses between touches end letters and words, so the decoded text appears on screen as you go.
 
 ![Interface preview](docs/preview.png)
 <sub>Interface preview, rendered with a placeholder camera image.</sub>
@@ -64,20 +64,24 @@ The tests cover the Morse logic and the gesture detector and do not need a camer
 
 Hold your **right hand** up to the camera, palm facing the screen. The left hand is ignored on purpose, so it can rest or hold a coffee.
 
-| Gesture (thumb touches...) | Action |
+Keep the index and middle fingers slightly apart (a small V) while resting. A line is drawn between the two fingertips so you can see the gap.
+
+Everything is timed in one unit **t** (0.20 s by default, adjustable in the settings window):
+
+| Gesture | Action |
 |---|---|
-| **Index** finger | Add a dot `·` |
-| **Middle** finger | Add a dash `–` |
-| **Ring** finger, once | End the letter and show it |
-| **Ring** finger, twice quickly | Add a space |
-| **Pinky**, short tap | Delete the last symbol, or the last letter if no symbol is pending |
-| **Pinky**, hold for 1 second | Clear everything |
+| Index and middle tips touch for **less than 1.5 t** | Add a dot `·` (typed when the fingers separate) |
+| Index and middle tips touch for **1.5 t or longer** | Add a dash `–` (typed as soon as 1.5 t is reached) |
+| Fingers apart for **3 t** | End the letter and show it |
+| Fingers apart for **7 t** | Add a space |
 
-**Example: typing "HI"**
+While the fingers touch, a ring around the contact point fills up towards a dash, and the line turns from the dot colour to the dash colour. While they are apart, a small bar under the code counts down to "end letter" and then to "space".
 
-1. Index, index, index, index (`····`) then ring once. **H** pops up.
-2. Index, index (`··`) then ring once. **I** pops up.
-3. Ring again straight away to add a space before the next word.
+**Example: typing "HI"** (t = 0.20 s)
+
+1. Four short touches (`····`), then keep the fingers apart for 0.6 s. **H** pops up.
+2. Two short touches (`··`), then keep them apart for 0.6 s. **I** pops up.
+3. Keep them apart until 1.4 s in total to add a space before the next word.
 
 ### Screen layout
 
@@ -99,8 +103,8 @@ The window is a 480 × 800 portrait (3:5):
 | `X` | Open or close the camera settings window |
 | `H` | Show or hide the Morse chart |
 | `M` | Mute or unmute sounds |
-| `Backspace` | Delete (same as a pinky tap) |
-| `Delete` | Clear all (same as a pinky hold) |
+| `Backspace` | Delete the last symbol, or the last letter if no symbol is pending |
+| `Delete` | Clear everything |
 | `Esc` / `Q` | Quit |
 
 ### Camera settings window
@@ -111,7 +115,7 @@ Press `X` to open it. Changes apply instantly and are saved to `settings.json` w
 
 - **Live stats**: the real capture resolution, camera FPS and app FPS. Green is 30 FPS or more, amber is 15 to 30, red is below 15. FPS is shown only here, not on the main screen.
 - **Camera**: device number, resolution, target FPS (30 or 60), mirror view, auto exposure, and manual exposure, brightness, contrast and gain.
-- **Gestures**: how close the fingers must be to count as a touch, the double-tap window for the space, how long the pinky hold takes, and a switch for cameras that report left and right the wrong way round.
+- **Gestures**: how close the index and middle fingertips must be to count as a touch, the time unit t, and a switch for cameras that report left and right the wrong way round.
 - **Driver settings** (Windows): opens the camera maker's own settings dialog for anything not listed here.
 
 ### Troubleshooting
@@ -149,9 +153,9 @@ Think of the app as a small assembly line with five stations.
 
 2. **The hand finder draws a skeleton.** A pre-trained model from Google looks at each picture and places 21 dots on your hand: the wrist, every knuckle and every fingertip. It also says which hand is the left one and which is the right one. The app only listens to the right hand.
 
-3. **The touch detector watches the thumb.** For each finger, the app measures the gap between the tip of that finger and the tip of your thumb. When the gap becomes very small, it counts as a touch. The gap is compared with the size of your palm, so it works the same whether your hand is close to the camera or far from it. To avoid mistakes from a shaky picture, a touch must be seen in two pictures in a row before it counts, and the fingers have to open clearly before a new touch can start.
+3. **The touch detector watches two fingertips.** The app measures the gap between the tip of the index finger and the tip of the middle finger. When the gap becomes very small, it counts as a touch. The gap is compared with the size of your palm, so it works the same whether your hand is close to the camera or far from it. To avoid mistakes from a shaky picture, a touch must be seen in two pictures in a row before it counts, and the fingers have to open clearly before it ends.
 
-4. **The Morse translator builds letters.** Each touch is turned into an instruction: dot, dash, finish the letter, space, delete or clear. The dots and dashes are collected until you touch the ring finger, then they are looked up in the international Morse table, exactly like a telegraph operator would do with a code book. If the code does not exist, the app shows a red question mark instead of guessing.
+4. **The Morse translator builds letters.** Like a telegraph key, the length of each touch decides the symbol: short is a dot, long is a dash. The length of the gap after it decides the rest: a short gap ends the letter, a long gap adds a space. The dots and dashes of a letter are looked up in the international Morse table, exactly like a telegraph operator would do with a code book. If the code does not exist, the app shows a red question mark instead of guessing.
 
 5. **The screen shows the result.** The camera picture keeps its normal colours. The dots and dashes you type glow in the middle of the picture, each finger has its own colour, and a short sound confirms every action. The finished letter pops up in the middle and is added to the message at the bottom. Press Enter and the message moves up into a chat history, like a messaging app.
 
@@ -167,9 +171,9 @@ The app never records or uploads anything. Every picture is processed in memory 
 flowchart LR
     A[Camera thread<br/>OpenCV, MJPG] -->|latest frame| B[Mirror + BGR to RGB]
     B --> C[MediaPipe Hand Landmarker<br/>VIDEO mode]
-    C -->|21 x 3 landmarks<br/>right hand only| D[PinchDetector<br/>ratio + hysteresis]
+    C -->|21 x 3 landmarks<br/>right hand only| D[FingerKey<br/>ratio + hysteresis + timing]
     C --> E[One Euro filter<br/>display only]
-    D -->|DOWN / HOLD / UP| F[MorseComposer<br/>state machine]
+    D -->|DOT / DASH / pause time| F[MorseComposer<br/>state machine]
     F --> G[HUD<br/>pygame surfaces]
     E --> G
     G --> H[ModernGL compositor<br/>glass + bloom shader]
@@ -191,19 +195,17 @@ MediaPipe labels handedness as if the image were a mirrored selfie. The frame is
 
 ### Touch detection (`gestures.py`)
 
-For every finger `f`:
-
 ```
-ratio_f = |thumb_tip - tip_f| / |wrist - middle_mcp|
+ratio = |index_tip - middle_tip| / |wrist - middle_mcp|
 ```
 
-- Distance uses x and y in pixels plus half-weighted depth `z`. Monocular depth is noisy, but a small weight still separates fingers that overlap in 2D.
+- Distance uses x and y in pixels plus half-weighted depth `z`. Monocular depth is noisy, but a small weight still helps when the fingers overlap in 2D.
 - Normalising by palm length makes the threshold independent of distance to the camera. A unit test checks that a half-size hand gives the same result.
-- **Hysteresis**: a touch starts below `touch_ratio` (0.30) and ends above `touch_ratio + release_gap` (0.42).
-- **Debounce**: `CONFIRM_FRAMES = 2` and `RELEASE_FRAMES = 2`, plus an 80 ms refractory period after a release.
-- **Exclusivity**: only one finger can be active. When several are below the threshold, the smallest ratio wins, and it has to stay the winner for the confirmation frames.
-- Events: `DOWN` fires immediately for dot, dash and ring so feedback feels instant. The pinky uses `UP` (delete, when shorter than the hold time) and `HOLD` (clear, fired once). This way a long hold never deletes a character before clearing.
-- `closeness` (0 to 1 per finger) is exported for the visuals: fingertip size, glow and the thin tether line that shows which finger is about to fire.
+- **Hysteresis**: a touch starts below `touch_ratio` (0.25) and ends above `touch_ratio + release_gap` (0.35).
+- **Debounce**: `CONFIRM_FRAMES = 2` and `RELEASE_FRAMES = 2`.
+- **Timing** (`FingerKey`): `DASH` fires the moment a touch reaches 1.5 t, while the fingers are still together, so it lands without waiting. `DOT` can only be known when the fingers separate before 1.5 t. `pause_time()` is the time since the fingers separated.
+- If the hand leaves the frame during a touch, the touch ends without typing a dot and the pause starts counting.
+- `closeness` (0 to 1) is exported for the visuals: the line between the two fingertips gets brighter as they get closer.
 
 ### Morse state machine (`morse.py`)
 
@@ -211,12 +213,13 @@ ratio_f = |thumb_tip - tip_f| / |wrist - middle_mcp|
 
 | State | Input | Result |
 |---|---|---|
-| any | dot / dash | append to `code`, cancel pending space |
-| `code` not empty | ring | decode, `LETTER` or `INVALID`, arm double tap |
-| armed, within window | ring | `SPACE` (never leading, never doubled) |
-| armed, window expired | ring | re-arm (acts as a first tap) |
+| any | dot / dash | append to `code` |
+| `code` not empty | fingers apart for 3 t | decode, `LETTER` or `INVALID` |
+| a letter typed since the last space | fingers apart for 7 t | `SPACE` (never leading, never doubled) |
 | `code` longer than 6 | dot / dash | `INVALID` right away, since no code is that long |
-| any | pinky tap | delete last symbol, otherwise last character |
+| any | `Backspace` | delete last symbol, otherwise last character |
+
+`update_pause(pause, letter_gap, word_gap)` is called every frame with the time since the fingers separated; each step fires once per pause. `pause_state()` tells the HUD what the pause is counting towards.
 
 The table follows ITU-R M.1677-1 for A to Z, 0 to 9 and common punctuation. `candidates(prefix)` powers the live chart and the prediction preview.
 
@@ -258,7 +261,7 @@ AI_computer_vision_morse_coding/
 │   ├── config.py            constants, colours, saved settings
 │   ├── camera.py            threaded webcam reader
 │   ├── hand_tracker.py      MediaPipe wrapper, model download, handedness
-│   ├── gestures.py          thumb-to-finger touch detector
+│   ├── gestures.py          index-to-middle finger key with timing
 │   ├── morse.py             Morse table and composer state machine
 │   ├── filters.py           One Euro smoothing filter
 │   ├── hud.py               everything drawn on top of the camera

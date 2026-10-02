@@ -1,67 +1,67 @@
-"""Tests for the pinch detector using synthetic hand poses."""
+"""Tests for the index/middle finger key using synthetic hand poses."""
 
 import unittest
 
 import numpy as np
 
-from morse_hand.gestures import FINGER_TIPS, THUMB_TIP, PinchDetector, TouchPhase
+from morse_hand.gestures import FINGER_TIPS, FingerKey, PressKind
 
 
-def open_hand() -> np.ndarray:
-    """A flat, open right hand roughly 200 px tall."""
+def apart() -> np.ndarray:
+    """An open right hand, index and middle in a V, palm length 100 px."""
     pts = np.zeros((21, 3), dtype=np.float32)
     pts[0] = (400, 500, 0)          # wrist
     pts[9] = (400, 400, 0)          # middle finger base -> palm length 100
-    pts[THUMB_TIP] = (300, 400, 0)
-    pts[FINGER_TIPS["index"]] = (360, 300, 0)
-    pts[FINGER_TIPS["middle"]] = (400, 290, 0)
-    pts[FINGER_TIPS["ring"]] = (440, 300, 0)
-    pts[FINGER_TIPS["pinky"]] = (480, 330, 0)
+    pts[FINGER_TIPS["index"]] = (350, 300, 0)
+    pts[FINGER_TIPS["middle"]] = (410, 290, 0)   # ~0.61 palm apart
     return pts
 
 
-def touching(finger: str) -> np.ndarray:
-    pts = open_hand()
-    pts[THUMB_TIP] = pts[FINGER_TIPS[finger]] + np.array([8, 8, 0], dtype=np.float32)
+def together() -> np.ndarray:
+    pts = apart()
+    pts[FINGER_TIPS["index"]] = pts[FINGER_TIPS["middle"]] + np.array([-10, 5, 0],
+                                                                      dtype=np.float32)
     return pts
 
 
-class PinchDetectorTest(unittest.TestCase):
-    def run_frames(self, detector, poses, start=0.0, dt=1 / 30):
+class FingerKeyTest(unittest.TestCase):
+    DT = 1 / 30
+
+    def run_frames(self, key, poses, start=0.0):
         events, t = [], start
         for pose in poses:
-            events.extend(detector.update(pose, t))
-            t += dt
-        return events, t
+            events.extend(key.update(pose, t))
+            t += self.DT
+        return [e.kind for e in events], t
 
-    def test_tap_produces_down_then_up(self):
-        d = PinchDetector()
-        poses = [open_hand()] * 3 + [touching("middle")] * 4 + [open_hand()] * 4
-        events, _ = self.run_frames(d, poses)
-        phases = [(e.phase, e.finger) for e in events]
-        self.assertEqual(phases, [(TouchPhase.DOWN, "middle"), (TouchPhase.UP, "middle")])
+    def test_short_touch_is_dot(self):
+        key = FingerKey(time_unit=0.2)                # dash after 0.3 s
+        kinds, _ = self.run_frames(key, [apart()] * 3 + [together()] * 5 + [apart()] * 4)
+        self.assertEqual(kinds, [PressKind.DOWN, PressKind.DOT, PressKind.UP])
+
+    def test_long_touch_is_dash_before_release(self):
+        key = FingerKey(time_unit=0.2)
+        kinds, _ = self.run_frames(key, [apart()] * 3 + [together()] * 15)
+        self.assertEqual(kinds, [PressKind.DOWN, PressKind.DASH])
+        kinds, _ = self.run_frames(key, [apart()] * 4, start=1.0)
+        self.assertEqual(kinds, [PressKind.UP])        # no extra dot on release
 
     def test_single_noisy_frame_is_ignored(self):
-        d = PinchDetector()
-        poses = [open_hand(), touching("index"), open_hand(), open_hand()]
-        events, _ = self.run_frames(d, poses)
-        self.assertEqual(events, [])
+        key = FingerKey()
+        kinds, _ = self.run_frames(key, [apart(), together(), apart(), apart()])
+        self.assertEqual(kinds, [])
 
-    def test_hold_fires_once(self):
-        d = PinchDetector(hold_time=0.5)
-        poses = [touching("pinky")] * 30 + [open_hand()] * 3
-        events, _ = self.run_frames(d, poses)
-        phases = [e.phase for e in events]
-        self.assertEqual(phases.count(TouchPhase.HOLD), 1)
-        self.assertEqual(phases[0], TouchPhase.DOWN)
-        self.assertEqual(phases[-1], TouchPhase.UP)
+    def test_pause_time_counts_after_release(self):
+        key = FingerKey(time_unit=0.2)
+        _, t = self.run_frames(key, [together()] * 4 + [apart()] * 2)
+        self.assertFalse(key.touching)
+        self.assertGreater(key.pause_time(t + 0.5), 0.5)
 
     def test_scale_invariance(self):
         """The same pose at half size must still register as a touch."""
-        d = PinchDetector()
-        small = [touching("ring") * 0.5] * 3
-        events, _ = self.run_frames(d, small)
-        self.assertEqual(events[0].finger, "ring")
+        key = FingerKey()
+        kinds, _ = self.run_frames(key, [together() * 0.5] * 3)
+        self.assertEqual(kinds[0], PressKind.DOWN)
 
 
 if __name__ == "__main__":

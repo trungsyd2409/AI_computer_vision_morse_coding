@@ -83,6 +83,11 @@ class MorseComposer:
         self.text = ""                     # the decoded message
         self._ring_armed = False
         self._last_ring_time = 0.0
+        # Pause-driven input (finger key): a letter has been committed since
+        # the last space, and which pause steps already fired.
+        self._word_open = False
+        self._letter_done = False
+        self._space_done = False
 
     # -- symbol input -------------------------------------------------------
 
@@ -134,6 +139,48 @@ class MorseComposer:
             return -1.0
         return elapsed / self.double_tap_window
 
+    # -- pauses: end of letter and space (finger key input) -----------------
+
+    def update_pause(self, pause: float, letter_gap: float, word_gap: float) -> list:
+        """
+        Feed the time (seconds) since the fingers separated, every frame.
+        Fingers apart for `letter_gap` ends the letter, for `word_gap` adds
+        a space. Each step fires once per pause. Returns composer events.
+        """
+        if pause <= 0.0:
+            self._letter_done = False
+            self._space_done = False
+            return []
+        events = []
+        if not self._letter_done and pause >= letter_gap:
+            self._letter_done = True
+            if self.code:
+                event = self._commit()
+                if event.kind == EventKind.LETTER:
+                    self._word_open = True
+                events.append(event)
+        if not self._space_done and pause >= word_gap:
+            self._space_done = True
+            if self._word_open:
+                self._word_open = False
+                event = self._insert_space()
+                if event is not None:
+                    events.append(event)
+        return events
+
+    def pause_state(self, pause: float, letter_gap: float, word_gap: float) -> tuple:
+        """
+        What the current pause is counting towards, for the HUD:
+        ("letter", progress), ("space", progress) or (None, 0.0).
+        """
+        if pause <= 0.0:
+            return None, 0.0
+        if self.code and pause < letter_gap:
+            return "letter", pause / letter_gap
+        if self._word_open and pause < word_gap:
+            return "space", max(0.0, (pause - letter_gap) / max(word_gap - letter_gap, 1e-6))
+        return None, 0.0
+
     # -- pinky: delete and clear ---------------------------------------------
 
     def delete(self) -> Optional[ComposerEvent]:
@@ -154,10 +201,12 @@ class MorseComposer:
         text = self.text.strip()
         self.text = ""
         self._ring_armed = False
+        self._word_open = False
         return text
 
     def clear(self) -> ComposerEvent:
         self._ring_armed = False
+        self._word_open = False
         self.code = ""
         self.text = ""
         return ComposerEvent(EventKind.CLEAR)

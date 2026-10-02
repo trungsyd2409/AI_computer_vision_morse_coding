@@ -159,11 +159,9 @@ class SettingsWindow:
         self.gesture_label_y = y + 10
         y += 34
         add(Slider("Touch distance", "gesture", "touch_ratio",
-                   ges["touch_ratio"], 0.18, 0.45, 0.01, "{:.2f}"))
-        add(Slider("Double tap", "gesture", "double_tap_window",
-                   ges["double_tap_window"], 0.25, 0.80, 0.05, "{:.2f} s"))
-        add(Slider("Hold to clear", "gesture", "hold_to_clear",
-                   ges["hold_to_clear"], 0.6, 2.0, 0.1, "{:.1f} s"))
+                   ges["touch_ratio"], 0.10, 0.50, 0.01, "{:.2f}"))
+        add(Slider("Time unit t", "gesture", "time_unit",
+                   ges["time_unit"], 0.08, 0.60, 0.01, "{:.2f} s"))
         add(Toggle("Swap left / right", "gesture", "swap_hands", ges["swap_hands"]))
 
         footer_y = SETTINGS_SIZE[1] - PAD - 36

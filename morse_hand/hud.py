@@ -35,7 +35,7 @@ import pygame
 from . import draw
 from .config import (ACCENT, CAMERA_RECT, DANGER, FINGER_COLORS, FONTS_DIR,
                      TEXT, TEXT_FAINT, TEXT_MUTED)
-from .gestures import FINGER_ORDER, FINGER_TIPS, THUMB_TIP
+from .gestures import FINGER_TIPS, KEY_FINGERS
 from .morse import MORSE_TABLE, candidates
 
 # Bones of the hand as pairs of landmark indices.
@@ -75,10 +75,12 @@ class HudState:
 
     camera_error: Optional[str] = None
     landmarks: Optional[np.ndarray] = None   # (21, 2+) screen pixels, smoothed
-    closeness: dict = field(default_factory=dict)
-    active_finger: Optional[str] = None
+    key_closeness: float = 0.0           # 0 = index/middle apart, 1 = touching
+    key_touching: bool = False           # the two fingertips are pressed together
     contact_point: tuple = (0, 0)
-    hold_progress: float = -1.0          # 0..1 while the pinky is held
+    press_progress: float = 0.0          # press time / dash time (>= 1 means dash)
+    pause_kind: Optional[str] = None     # "letter", "space" or None
+    pause_progress: float = 0.0          # 0..1 towards `pause_kind`
     code: str = ""
     text: str = ""
     chat: list = field(default_factory=list)   # ChatMessage, oldest first
@@ -210,7 +212,7 @@ class Hud:
             self._draw_camera_error(state)
 
         self._draw_bursts(now)
-        self._draw_hold(state)
+        self._draw_pause(state)
         self._draw_pops(now)
 
     def _build_panels(self, state: HudState, now: float) -> None:
@@ -268,41 +270,41 @@ class Hud:
         bone_color = (236, 241, 255, 120)
         for a, b in HAND_BONES:
             draw.line(self.ui, bone_color, pts[a], pts[b], 2)
+        key_tips = {FINGER_TIPS[f] for f in KEY_FINGERS}
         for i, p in enumerate(pts):
-            if i in FINGER_TIPS.values() or i == THUMB_TIP:
+            if i in key_tips:
                 continue
             draw.circle(self.ui, (236, 241, 255, 200), p, 2.5)
 
-        thumb = pts[THUMB_TIP]
+        # The key: a line between the index and middle fingertips. Faint
+        # while they are apart, brighter as they get closer, and in the
+        # colour of the symbol it will type while they touch (dot, then
+        # dash once the press is long enough).
+        a = pts[FINGER_TIPS["index"]]
+        b = pts[FINGER_TIPS["middle"]]
+        c = state.key_closeness
+        if state.key_touching:
+            kind = "middle" if state.press_progress >= 1.0 else "index"
+            color = FINGER_COLORS[kind]
+            pulse = 0.5 + 0.5 * math.sin(now * 10.0)
+            draw.line(self.ui, color, a, b, 4)
+            draw.glow(self.glow, color, state.contact_point, 26 + 5 * pulse, 0.6)
+            draw.ring(self.ui, draw.with_alpha(color, 0.9), state.contact_point, 13, 2)
+            if state.press_progress < 1.0:
+                # Progress towards a dash around the contact point.
+                draw.arc(self.ui, FINGER_COLORS["middle"], state.contact_point, 19,
+                         0, 2 * math.pi * state.press_progress, 2.5)
+        else:
+            draw.line(self.ui, (255, 255, 255, round(70 + 150 * c)), a, b, 2)
 
-        # Thin "tether" from the thumb to whichever finger is closest, so
-        # the user can see which gesture is about to fire.
-        if state.closeness:
-            nearest = max(state.closeness, key=state.closeness.get)
-            c = state.closeness[nearest]
-            if c > 0.35 and state.active_finger is None:
-                tip = pts[FINGER_TIPS[nearest]]
-                color = FINGER_COLORS[nearest]
-                draw.line(self.ui, draw.with_alpha(color, (c - 0.35) * 1.4), thumb, tip, 2)
-
-        for finger in FINGER_ORDER:
+        for finger in KEY_FINGERS:
             tip = pts[FINGER_TIPS[finger]]
-            color = FINGER_COLORS[finger]
-            c = state.closeness.get(finger, 0.0)
-            active = state.active_finger == finger
-            radius = 4.5 + 3.0 * c + (2.0 if active else 0.0)
+            color = FINGER_COLORS["index"] if not state.key_touching or \
+                state.press_progress < 1.0 else FINGER_COLORS["middle"]
+            radius = 4.5 + 3.0 * c
             draw.glow(self.glow, color, tip, 14 + 18 * c, 0.25 + 0.6 * c)
             draw.circle(self.ui, color, tip, radius)
             draw.circle(self.ui, (255, 255, 255), tip, max(1.5, radius * 0.38))
-
-        draw.glow(self.glow, (255, 255, 255), thumb, 16, 0.3)
-        draw.circle(self.ui, (255, 255, 255), thumb, 5.5)
-
-        if state.active_finger is not None:
-            color = FINGER_COLORS[state.active_finger]
-            pulse = 0.5 + 0.5 * math.sin(now * 10.0)
-            draw.glow(self.glow, color, state.contact_point, 28 + 5 * pulse, 0.55)
-            draw.ring(self.ui, draw.with_alpha(color, 0.9), state.contact_point, 13, 2)
 
     # ------------------------------------------------------------------------
     # Panels
@@ -519,16 +521,22 @@ class Hud:
             draw.glow(self.glow, color, (x, y), 26 + 26 * e, 0.6 * (1.0 - t))
         self._bursts = alive
 
-    def _draw_hold(self, state: HudState) -> None:
-        if state.hold_progress < 0 or state.active_finger != "pinky":
+    def _draw_pause(self, state: HudState) -> None:
+        """While the fingers are apart: a small bar counting to the next step."""
+        if state.pause_kind is None:
             return
-        color = FINGER_COLORS["pinky"]
-        center = state.contact_point
-        draw.ring(self.ui, (255, 255, 255, 40), center, 24, 3)
-        draw.arc(self.ui, color, center, 24, 0, 2 * math.pi * state.hold_progress, 3.5)
-        draw.glow(self.glow, color, center, 40, 0.6 * state.hold_progress)
-        self.blit(self.text("medium", 11, "hold to clear", color),
-                  (center[0], center[1] + 40), "center")
+        key = "ring"
+        text = "end letter" if state.pause_kind == "letter" else "space"
+        color = FINGER_COLORS[key]
+        cx, cy = self.code_center
+        cy += 44
+        track = pygame.Rect(0, 0, 120, 4)
+        track.center = (cx, cy)
+        draw.rounded_rect(self.ui, (255, 255, 255, 40), track, 2)
+        fill = track.copy()
+        fill.w = max(4, round(track.w * min(1.0, state.pause_progress)))
+        draw.rounded_rect(self.ui, draw.with_alpha(color, 0.9), fill, 2)
+        self.blit(self.text("medium", 11, text, color), (cx, cy + 14), "center")
 
     def _draw_pops(self, now: float) -> None:
         alive = []

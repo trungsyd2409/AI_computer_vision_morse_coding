@@ -4,8 +4,10 @@ Application loop: camera -> hand tracking -> gestures -> Morse -> screen.
 Per frame:
   1. Take the newest camera frame (the camera runs in its own thread).
   2. Mirror it and run MediaPipe to find the right hand.
-  3. Convert the landmarks to screen pixels and feed the pinch detector.
-  4. Translate touch events into Morse input (dot, dash, commit, delete).
+  3. Convert the landmarks to screen pixels and feed the finger key: the
+     index and middle fingertips touching for < 1.5 t types a dot, for
+     >= 1.5 t a dash.
+  4. Fingers apart for 3 t ends the letter, for 7 t adds a space.
   5. Draw the HUD and let the GPU compose the final image.
 
 Enter sends the typed message: it moves into the chat history above the
@@ -26,7 +28,7 @@ from .compositor import Compositor, cover_crop
 from .config import (APP_TITLE, CAMERA_RECT, WINDOW_SIZE, AppSettings, CameraSettings,
                      GestureSettings)
 from .filters import OneEuroFilter
-from .gestures import PinchDetector, TouchPhase
+from .gestures import FingerKey, PressKind
 from .hand_tracker import HandTracker
 from .hud import ChatMessage, Hud, HudState
 from .morse import EventKind, MorseComposer
@@ -64,8 +66,8 @@ class MorseHandApp:
         self.camera.start()
 
         g = self.settings.gesture
-        self.detector = PinchDetector(g.touch_ratio, g.release_gap, g.hold_to_clear)
-        self.composer = MorseComposer(g.double_tap_window)
+        self.detector = FingerKey(g.touch_ratio, g.release_gap, g.time_unit)
+        self.composer = MorseComposer()
         self.smoother = OneEuroFilter()
         self.settings_link = SettingsLink()
 
@@ -167,27 +169,30 @@ class MorseHandApp:
 
         state = self._state
         if result.right is None:
-            self.detector.reset()
+            for event in self.detector.reset(now):
+                self._handle_press(event, now)
             self.smoother.reset()
             state.landmarks = None
-            state.active_finger = None
-            state.hold_progress = -1.0
-            return
-
-        points = self._to_screen(result.right, frame_rgb.shape)
-        state.landmarks = self.smoother(points, now)
-
-        for event in self.detector.update(points, now):
-            self._handle_touch(event, now)
-
-        state.closeness = dict(self.detector.closeness)
-        state.active_finger = self.detector.active
-        state.contact_point = self.detector.contact_point
-        if self.detector.active == "pinky":
-            held = now - self.detector.active_since
-            state.hold_progress = min(1.0, held / self.detector.hold_time) if held > 0.2 else -1.0
+            state.key_touching = False
+            state.key_closeness = 0.0
         else:
-            state.hold_progress = -1.0
+            points = self._to_screen(result.right, frame_rgb.shape)
+            state.landmarks = self.smoother(points, now)
+            for event in self.detector.update(points, now):
+                self._handle_press(event, now)
+            state.key_touching = self.detector.touching
+            state.key_closeness = self.detector.closeness
+            state.contact_point = self.detector.contact_point
+
+        # Fingers apart: end the letter after 3 t, add a space after 7 t.
+        # Without a hand the fingers cannot be touching, so the pause counts.
+        d = self.detector
+        pause = d.pause_time(now)
+        for event in self.composer.update_pause(pause, d.letter_gap, d.word_gap):
+            self._apply_composer(event, now)
+        state.press_progress = d.press_time(now) / max(d.dash_after, 1e-6)
+        state.pause_kind, state.pause_progress = self.composer.pause_state(
+            pause, d.letter_gap, d.word_gap)
 
     def _to_screen(self, landmarks: np.ndarray, shape) -> np.ndarray:
         """Normalised camera coordinates -> window pixels (same crop as the GPU)."""
@@ -200,23 +205,14 @@ class MorseHandApp:
         out[:, 2] = landmarks[:, 2] * W / sx     # depth, roughly in x-pixel units
         return out
 
-    def _handle_touch(self, event, now: float) -> None:
-        finger = event.finger
-        if event.phase == TouchPhase.DOWN:
-            self.hud.on_touch(finger, event.point, now)
-            if finger == "index":
-                self._apply_composer(self.composer.add_symbol("."), now)
-            elif finger == "middle":
-                self._apply_composer(self.composer.add_symbol("-"), now)
-            elif finger == "ring":
-                self._apply_composer(self.composer.ring_tap(now), now)
-        elif finger == "pinky":
-            # Delete fires on release so a long hold can become "clear all"
-            # without deleting a character first.
-            if event.phase == TouchPhase.HOLD:
-                self._apply_composer(self.composer.clear(), now)
-            elif event.phase == TouchPhase.UP and event.duration < self.detector.hold_time:
-                self._apply_composer(self.composer.delete(), now)
+    def _handle_press(self, event, now: float) -> None:
+        if event.kind == PressKind.DOWN:
+            self.hud.on_touch("index", event.point, now)
+        elif event.kind == PressKind.DOT:
+            self._apply_composer(self.composer.add_symbol("."), now)
+        elif event.kind == PressKind.DASH:
+            self.hud.on_touch("middle", event.point, now)
+            self._apply_composer(self.composer.add_symbol("-"), now)
 
     def _apply_composer(self, event, now: float) -> None:
         if event is None:
@@ -277,8 +273,7 @@ class MorseHandApp:
         setattr(g, key, value)
         self.detector.touch_ratio = g.touch_ratio
         self.detector.release_gap = g.release_gap
-        self.detector.hold_time = g.hold_to_clear
-        self.composer.double_tap_window = g.double_tap_window
+        self.detector.time_unit = g.time_unit
 
     def _reset_settings(self) -> None:
         index = self.settings.camera.index

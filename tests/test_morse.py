@@ -106,3 +106,35 @@ class ComposerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PauseComposerTest(unittest.TestCase):
+    """Letters and spaces driven by how long the fingers stay apart."""
+
+    def test_letter_then_space(self):
+        c = MorseComposer()
+        for s in "....":
+            c.add_symbol(s)
+        self.assertEqual(c.update_pause(0.3, 0.6, 1.4), [])
+        events = c.update_pause(0.7, 0.6, 1.4)
+        self.assertEqual([e.kind for e in events], [EventKind.LETTER])
+        self.assertEqual(c.text, "H")
+        events = c.update_pause(1.5, 0.6, 1.4)
+        self.assertEqual([e.kind for e in events], [EventKind.SPACE])
+        self.assertEqual(c.text, "H ")
+        # Each step fires once per pause.
+        self.assertEqual(c.update_pause(3.0, 0.6, 1.4), [])
+
+    def test_no_space_without_a_letter(self):
+        c = MorseComposer()
+        self.assertEqual(c.update_pause(5.0, 0.6, 1.4), [])
+        self.assertEqual(c.text, "")
+
+    def test_new_press_resets_the_pause(self):
+        c = MorseComposer()
+        c.add_symbol(".")
+        c.update_pause(0.7, 0.6, 1.4)            # E
+        c.update_pause(0.0, 0.6, 1.4)            # fingers touch again
+        c.add_symbol("-")
+        c.update_pause(0.7, 0.6, 1.4)            # T
+        self.assertEqual(c.text, "ET")

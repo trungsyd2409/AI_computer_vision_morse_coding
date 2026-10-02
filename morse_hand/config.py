@@ -52,13 +52,13 @@ SUCCESS = (74, 222, 128)
 WARNING = (251, 191, 36)
 DANGER = (251, 113, 133)
 
-# One colour per gesture finger so the legend, the fingertips and the
-# feedback bursts all speak the same visual language.
+# One colour per action so the line between the fingertips, the typed
+# symbols and the feedback bursts all speak the same visual language.
 FINGER_COLORS = {
     "index": (103, 232, 249),     # dot
     "middle": (167, 139, 250),    # dash
     "ring": (251, 191, 36),       # end of letter / space
-    "pinky": (251, 113, 133),     # delete / clear
+    "pinky": (251, 113, 133),     # clear
 }
 
 # ---------------------------------------------------------------------------
@@ -91,15 +91,17 @@ class CameraSettings:
 
 @dataclass
 class GestureSettings:
-    """Thresholds that decide when two fingertips count as touching."""
+    """When the index and middle fingertips count as touching, and timing."""
 
-    # Distance between thumb tip and fingertip, divided by the palm length.
-    # Below `touch_ratio` the pinch starts, above `touch_ratio + release_gap`
-    # it ends. The gap (hysteresis) stops the state from flickering.
-    touch_ratio: float = 0.30
-    release_gap: float = 0.12
-    double_tap_window: float = 0.45   # seconds between two ring taps = space
-    hold_to_clear: float = 1.0        # seconds of pinky contact = clear all
+    # Distance between the index and middle fingertips, divided by the palm
+    # length. Below `touch_ratio` the press starts, above
+    # `touch_ratio + release_gap` it ends. The gap (hysteresis) stops the
+    # state from flickering.
+    touch_ratio: float = 0.25
+    release_gap: float = 0.10
+    # The Morse time unit t, in seconds. Fingers together < 1.5 t = dot,
+    # >= 1.5 t = dash; apart 3 t = end of letter, apart 7 t = space.
+    time_unit: float = 0.20
     swap_hands: bool = False          # fixes cameras that report the wrong side
 
 
