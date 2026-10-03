@@ -1,5 +1,5 @@
 """
-Settings window with two tabs: Camera and Eyes.
+Settings window with two tabs: Camera and Frown.
 
 It runs in a separate process with its own pygame window. The main window
 uses an OpenGL context, and a second window in the same process would
@@ -26,7 +26,7 @@ from .config import (ACCENT, ACTION_COLORS, DANGER, FPS_CHOICES, MIN_ACCEPTABLE_
 
 ROW_H = 32
 PAD = 24
-TABS = [("Camera", "camera"), ("Eyes", "eyes")]
+TABS = [("Camera", "camera"), ("Frown", "eyes")]
 
 
 def list_camera_names() -> list:
@@ -187,11 +187,10 @@ class SettingsWindow:
                 Slider("Gain", "camera", "gain", cam["gain"], 0, 255, 1, "{:.0f}"),
             ]),
             "eyes": page([
-                Slider("Close threshold", "eyes", "close_threshold",
-                       eyes["close_threshold"], 0.25, 0.75, 0.01, "{:.2f}"),
+                Slider("Frown threshold", "eyes", "close_threshold",
+                       eyes["close_threshold"], 0.10, 0.90, 0.01, "{:.2f}"),
                 Slider("Time unit t", "eyes", "time_unit",
                        eyes["time_unit"], 0.05, 0.50, 0.01, "{:.2f} s"),
-                Toggle("Swap left / right eye", "eyes", "swap_eyes", eyes["swap_eyes"]),
             ]),
         }
 
@@ -364,10 +363,10 @@ class SettingsWindow:
         s.blit(self._label("Timing"), (card.x + 16, card.y + 14))
 
         rows = [
-            (ACTION_COLORS["dot"], "Dot", f"blink shorter than {1.5 * t:.2f} s"),
-            (ACTION_COLORS["dash"], "Dash", f"blink {1.5 * t:.2f} s or longer"),
-            (ACTION_COLORS["letter"], "End letter", f"eyes open {3 * t:.2f} s"),
-            (ACTION_COLORS["word"], "Space", f"eyes open {7 * t:.2f} s"),
+            (ACTION_COLORS["dot"], "Dot", f"frown shorter than {1.5 * t:.2f} s"),
+            (ACTION_COLORS["dash"], "Dash", f"frown {1.5 * t:.2f} s or longer"),
+            (ACTION_COLORS["letter"], "End letter", f"relaxed {3 * t:.2f} s"),
+            (ACTION_COLORS["word"], "Space", f"relaxed {7 * t:.2f} s"),
         ]
         for i, (color, name, rule) in enumerate(rows):
             cy = card.y + 46 + i * 24

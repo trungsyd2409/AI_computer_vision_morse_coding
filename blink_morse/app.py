@@ -1,11 +1,12 @@
 """
-Application loop: camera -> face tracking -> blinks -> Morse -> screen.
+Application loop: camera -> face tracking -> frown -> Morse -> screen.
 
 Per frame:
   1. Take the newest camera frame (the camera runs in its own thread).
-  2. Mirror it and run MediaPipe to get the two eye blink scores.
-  3. Feed the scores to the blink detector, which times each blink:
-     short = dot, long = dash.
+  2. Mirror it, run MediaPipe for the face landmarks and measure the
+     furrow lines between the eyebrows (frown.py) -> a 0..1 frown score.
+  3. Feed the score to the press detector (blinks.py), which times each
+     frown: short = dot, long = dash.
   4. Let the Morse composer turn pauses into letters and spaces.
 
 Pressing Z hides the whole interface, shows the untouched camera image and
@@ -30,7 +31,7 @@ from .camera import CameraStream
 from .compositor import Compositor, cover_crop
 from .config import APP_TITLE, WINDOW_SIZE, AppSettings, CameraSettings, EyeSettings
 from .face_tracker import FaceTracker
-from .hud import CHIP_SIZE, CHIP_GAP, Hud, HudState
+from .hud import Hud, HudState
 from .morse import EventKind, MorseComposer
 from .settings_window import SettingsLink
 
@@ -67,10 +68,15 @@ class BlinkMorseApp:
 
         e = self.settings.eyes
         self.detector = BlinkDetector(e.close_threshold, e.time_unit)
+        for signal in (self.detector.left, self.detector.right):
+            # The frown score is already measured against the relaxed face,
+            # so the detector must not learn a resting level of its own.
+            signal.baseline = 0.0
+            signal.MAX_BASELINE = 0.0
         self.composer = MorseComposer(e.letter_gap, e.word_gap)
         self.settings_link = SettingsLink()
 
-        self.paused = False               # P stops typing, e.g. to rest the eyes
+        self.paused = False               # P stops typing, e.g. to rest the face
         self.ui_visible = True            # Z hides the UI and stops input
         self._filter = 1.0                # current strength of the styled look
         self.show_chart = True
@@ -80,7 +86,7 @@ class BlinkMorseApp:
         self._last_stats = 0.0
         self._props_sent = False
         self._state = HudState()
-        self._chip_pos = {"left": None, "right": None}
+        self._frown = None                # frown overlay in window pixels
 
     # ------------------------------------------------------------------------
 
@@ -150,6 +156,9 @@ class BlinkMorseApp:
                 self._apply_composer(self.composer.delete(), time.perf_counter())
             elif event.key == pygame.K_DELETE:
                 self._apply_composer(self.composer.clear(), time.perf_counter())
+            elif event.key == pygame.K_c:
+                self.tracker.recalibrate()
+                self.detector.reset(time.perf_counter())
         return True
 
     def _toggle_ui(self) -> None:
@@ -157,7 +166,7 @@ class BlinkMorseApp:
         state = self._state
         state.face = False
         state.pose = "open"
-        self._chip_pos = {"left": None, "right": None}
+        self._frown = None
         # Start timing afresh, so time spent with the UI hidden is not
         # counted as a pause that ends the letter.
         self.detector.reset(time.perf_counter())
@@ -184,19 +193,19 @@ class BlinkMorseApp:
             self.detector.reset()
             state.face = False
             state.pose = "open"
-            self._chip_pos = {"left": None, "right": None}
+            self._frown = None
         else:
-            for event in self.detector.update(face.left_score, face.right_score, now):
+            score = self._frown_score(face.frown)
+            for event in self.detector.update(score, score, now):
                 if not self.paused:
                     self._handle_blink(event, now)
             state.face = True
-            state.openness = {"left": 1.0 - self.detector.left.value,
-                              "right": 1.0 - self.detector.right.value}
             state.pose = self.detector.pose
-            self._update_chip_positions(face, frame_rgb.shape)
+            self._update_frown_overlay(face.frown, frown_score=score,
+                                       shape=frame_rgb.shape)
 
-        # Pauses end letters and words. Without a face the eyes cannot be
-        # blinking, so the time since the last blink keeps counting.
+        # Pauses end letters and words. Without a face nobody can be
+        # frowning, so the time since the last frown keeps counting.
         for event in self.composer.update(self.detector.pause_time(now)):
             self._apply_composer(event, now)
         self.compositor.update_camera(frame_rgb)
@@ -207,37 +216,32 @@ class BlinkMorseApp:
         elif event.kind == BlinkKind.DASH:
             self._apply_composer(self.composer.add_symbol("-"), now)
 
-    def _update_chip_positions(self, face, shape) -> None:
-        """
-        Place each openness readout just outside the eye's outer corner,
-        in window pixels. The position is lightly smoothed so the numbers
-        do not jitter with the landmarks; this has no effect on input.
-        """
+    @staticmethod
+    def _frown_score(frown) -> float:
+        """0..1 frown score for the press detector (0 while calibrating)."""
+        if frown is None or not frown.ok or frown.calibrating:
+            return 0.0
+        return float(frown.score)
+
+    def _update_frown_overlay(self, frown, frown_score: float, shape) -> None:
+        """Measured area and visible furrow lines, in window pixels."""
+        if frown is None or not frown.ok:
+            self._frown = None
+            return
         h, w = shape[:2]
         (sx, sy), (ox, oy) = cover_crop((w, h), WINDOW_SIZE)
         W, H = WINDOW_SIZE
 
         def to_screen(p):
-            return np.array([(p[0] - ox) / sx * W, (p[1] - oy) / sy * H])
+            return (float((p[0] - ox) / sx * W), float((p[1] - oy) / sy * H))
 
-        offset = CHIP_GAP + CHIP_SIZE[0] / 2
-        for side, corners in (("left", face.left_corners),
-                              ("right", face.right_corners)):
-            if corners is None:
-                self._chip_pos[side] = None
-                continue
-            outer, inner = to_screen(corners[0]), to_screen(corners[1])
-            direction = outer - inner
-            norm = np.linalg.norm(direction)
-            if norm < 1e-3:
-                continue
-            direction /= norm
-            target = outer + direction * offset
-            target[1] = (outer[1] + inner[1]) / 2
-            previous = self._chip_pos[side]
-            if previous is not None:
-                target = previous * 0.5 + target * 0.5
-            self._chip_pos[side] = target
+        self._frown = {
+            "box": [to_screen(p) for p in frown.box],
+            "contours": [[to_screen(p) for p in c] for c in frown.contours],
+            "score": frown_score,
+            "lines": frown.lines,
+            "calibrating": frown.calibrating,
+        }
 
     def _apply_composer(self, event, now: float) -> None:
         if event is None:
@@ -348,8 +352,9 @@ class BlinkMorseApp:
         state.code = self.composer.code
         state.text = self.composer.text
         state.paused = self.paused
-        state.chips = {side: (None if p is None else (float(p[0]), float(p[1])))
-                       for side, p in self._chip_pos.items()}
+        state.chips = {}
+        state.frown = self._frown
+        state.frown_threshold = e.close_threshold
 
         pause = self.detector.pause_time(now)
         kind, progress = self.composer.pause_state(pause)

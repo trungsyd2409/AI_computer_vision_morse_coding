@@ -1,6 +1,11 @@
 """
 Wrapper around MediaPipe's Face Landmarker (Tasks API).
 
+The Morse input is now a frown: `FrownDetector` (frown.py) measures the
+vertical furrow lines between the eyebrows on every frame, using the
+landmarks to find that area. The blink scores below are still returned,
+but the app no longer types with them.
+
 For every frame MediaPipe returns 478 face landmarks and 52 "blendshape"
 scores that describe the expression. Two of those scores, `eyeBlinkLeft`
 and `eyeBlinkRight`, go from about 0 (eye open) to about 1 (eye closed)
@@ -24,6 +29,7 @@ from typing import Optional
 import numpy as np
 
 from .config import FACE_MODEL_PATH, FACE_MODEL_URL
+from .frown import FrownDetector, FrownResult
 
 # Eye corners (outer, inner), named after the face as shown in the image.
 MP_RIGHT_EYE_CORNERS = (33, 133)
@@ -51,6 +57,8 @@ class FaceResult:
     # (outer corner, inner corner) of each eye as normalised (x, y) pairs
     left_corners: Optional[tuple] = None
     right_corners: Optional[tuple] = None
+    # Furrow lines between the eyebrows (see frown.py); drives Morse input
+    frown: Optional[FrownResult] = None
 
 
 class FaceTracker:
@@ -72,6 +80,11 @@ class FaceTracker:
         )
         self._landmarker = vision.FaceLandmarker.create_from_options(options)
         self._last_ts = -1
+        self._frown = FrownDetector()
+
+    def recalibrate(self) -> None:
+        """Learn the resting face again (keep the face relaxed)."""
+        self._frown.recalibrate()
 
     def detect(self, frame_rgb: np.ndarray, timestamp_ms: int,
                mirrored: bool, swap_eyes: bool = False) -> Optional[FaceResult]:
@@ -89,6 +102,7 @@ class FaceTracker:
                                data=np.ascontiguousarray(frame_rgb))
         result = self._landmarker.detect_for_video(image, timestamp_ms)
         if not result.face_blendshapes:
+            self._frown.reset()
             return None
 
         scores = {c.category_name: c.score for c in result.face_blendshapes[0]}
@@ -100,9 +114,15 @@ class FaceTracker:
                 return tuple((lm[i].x, lm[i].y) for i in ids)
 
             corners = (pair(MP_LEFT_EYE_CORNERS), pair(MP_RIGHT_EYE_CORNERS))
-        return build_result(scores.get("eyeBlinkLeft", 0.0),
+        face = build_result(scores.get("eyeBlinkLeft", 0.0),
                             scores.get("eyeBlinkRight", 0.0), mirrored, swap_eyes,
                             corners)
+        if result.face_landmarks:
+            h, w = frame_rgb.shape[:2]
+            pts = np.array([[p.x * w, p.y * h] for p in result.face_landmarks[0]],
+                           dtype=np.float64)
+            face.frown = self._frown.update(frame_rgb, pts, timestamp_ms / 1000.0)
+        return face
 
     def close(self) -> None:
         self._landmarker.close()

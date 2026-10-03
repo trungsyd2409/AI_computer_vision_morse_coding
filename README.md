@@ -1,6 +1,6 @@
-# Blink Morse
+# Frown Morse
 
-Type Morse code with your eyes, the way a telegraph operator uses a key: a short blink is a dot, a long blink is a dash, and keeping your eyes open marks the end of a letter or a word. Everything is timed in one adjustable unit, and the decoded text appears on screen as you go, no hands needed.
+Type Morse code by frowning, the way a telegraph operator uses a key: a short frown is a dot, a long frown is a dash, and a relaxed face marks the end of a letter or a word. The app measures the vertical furrow lines that appear between your eyebrows when you frown. Everything is timed in one adjustable unit, and the decoded text appears on screen as you go, no hands needed.
 
 ![Interface preview](docs/preview.png)
 <sub>Interface preview, rendered with a placeholder camera image.</sub>
@@ -62,30 +62,28 @@ The tests cover the Morse logic, the blink detector and the left/right eye mappi
 
 ## How to use it
 
-Sit facing the camera with your face well lit and blink with **both eyes**. All timings come from one time unit **t** (0.1 s by default, adjustable in the settings window):
+Sit facing the camera with your face well lit. **Keep your face relaxed for the first 2 seconds**: the app learns what your forehead looks like at rest (the frame between your eyebrows is white while it learns). Then frown, pulling your eyebrows together. All timings come from one time unit **t** (0.1 s by default, adjustable in the settings window):
 
-| Eyes | Result | With t = 0.1 s |
+| Face | Result | With t = 0.1 s |
 |---|---|---|
-| **Short blink**, shorter than 1.5 t | Dot `·` | under 0.15 s |
-| **Long blink**, 1.5 t or longer | Dash `–` | 0.15 s or more |
-| **Eyes open for 3 t** | End of letter, the Latin letter pops up | 0.3 s |
-| **Eyes open for 7 t** | End of word, a space is added | 0.7 s |
+| **Short frown**, shorter than 1.5 t | Dot `·` | under 0.15 s |
+| **Long frown**, 1.5 t or longer | Dash `–` | 0.15 s or more |
+| **Relaxed for 3 t** | End of letter, the Latin letter pops up | 0.3 s |
+| **Relaxed for 7 t** | End of word, a space is added | 0.7 s |
 
-These are the same ratios as classic Morse code, where silences separate letters and words. A dash is typed the moment the blink reaches 1.5 t, while your eyes are still closed, so it never waits for you to open them. A dot can only be known once your eyes open. Winking with one eye does nothing.
+A dash is typed the moment the frown reaches 1.5 t, while you are still frowning, so it never waits for you to relax. A dot can only be known once you relax.
 
-While your eyes are closed, a small outline appears after the current symbols and stretches from a dot towards a dash, and a ring next to the current letter counts down to the end of the letter once your eyes are open again.
+**What is shown on the face.** A thin frame between your eyebrows marks the area that is measured, and the furrow lines found there are outlined. Both are pink while the frown is not strong enough, cyan once it counts (a dot) and violet once it has become a dash. The **Frown** panel shows the score from 0 to 100 % with a white tick at the threshold.
 
-**Openness readouts.** A small glass label next to each eye shows how open that eye is, from 0 % (shut) to 100 % (your normal open eye). While both eyes are closed the labels light up cyan (the blink would be a dot) and turn violet once it has become a dash. The same values are shown as bars in the Eye openness panel, where the white tick marks the point below which an eye counts as closed.
+**Recalibrate with C** when the light changes or you move, keeping your face relaxed for 2 seconds. If the app sees a "frown" that lasts more than 4 seconds it assumes the resting face has changed and recalibrates by itself.
 
 **Example: typing "HI"**
 
-1. Blink quickly four times (`····`), then keep your eyes open. **H** pops up after 0.3 s.
-2. Blink quickly twice (`··`) and keep your eyes open. **I** pops up.
-3. Keep them open a little longer (0.7 s in total) and a space is added.
+1. Frown quickly four times (`····`), then relax. **H** pops up after 0.3 s.
+2. Frown quickly twice (`··`) and relax. **I** pops up.
+3. Stay relaxed a little longer (0.7 s in total) and a space is added.
 
-**Choosing t.** With 0.1 s everything is fast, which suits practised users. If letters end before you have finished them, or quick blinks come out as dashes, raise **t** to 0.15 or 0.2 s. The settings window shows what every rule means in seconds for the current value.
-
-**Normal blinks.** People blink without thinking 15 to 20 times a minute, and those blinks are read as dots or dashes too. Press **P** to pause listening whenever you want to rest your eyes, or **Z** to hide the interface and stop input completely.
+**Choosing t.** A frown is slower than a blink, so 0.15 to 0.25 s is often more comfortable than the default. The settings window shows what every rule means in seconds for the current value.
 
 **Hiding the interface.** Press **Z** to hide every panel and show the camera image with its normal colours. While the interface is hidden, face tracking and typing are switched off. Press **Z** again to bring everything back.
 
@@ -99,7 +97,8 @@ While a letter is in progress, the chart on the right dims every character you c
 |---|---|
 | `X` | Open or close the settings window |
 | `Z` | Hide or show the interface. Hidden = normal camera colours and no typing |
-| `P` | Pause or resume listening to your eyes |
+| `P` | Pause or resume listening |
+| `C` | Recalibrate the relaxed face (keep it relaxed for 2 seconds) |
 | `H` | Show or hide the Morse chart |
 | `M` | Mute or unmute sounds |
 | `Backspace` | Delete the last symbol, or the last letter if no symbol is pending |
@@ -117,10 +116,9 @@ Press `X` to open it. It has two tabs. Changes apply instantly and are saved to 
 - Device number, with the device name underneath on Windows (for example "Integrated Webcam" or "Camo"), resolution, target FPS (30 or 60), mirror view, auto exposure, and manual exposure, brightness, contrast and gain.
 - **Driver settings** (Windows) opens the camera maker's own settings dialog.
 
-**Eyes tab**
-- **Close threshold**: how closed an eye must be to count. An eye counts as closed when its openness drops below `1 - close threshold` (55 % by default), marked by the white tick on the openness bars.
+**Frown tab**
+- **Frown threshold**: how strong the frown score must be to count (0.30 by default), marked by the white tick on the Frown bar.
 - **Time unit t**: the base timing, from 0.05 to 0.5 s. A card below the slider spells out the dot, dash, letter and space timings for the current value.
-- **Swap left / right eye**: for cameras or phone apps that already mirror the image. It only affects which label sits next to which eye.
 
 ### Using an iPhone or Android phone as the camera
 
@@ -132,13 +130,12 @@ A phone camera is usually much sharper than a laptop webcam, and sharper eyes ma
 |---|---|
 | "Camera unavailable" | Close other apps using the camera (Teams, Zoom, OBS), or pick another device in the settings window. |
 | FPS below 15 | Choose 640×480 in settings, turn off auto exposure in a dark room (long exposure halves the frame rate), and plug the laptop in. |
-| Blinks are missed | Lower **Close threshold** a little. Good, even lighting on the face helps most. |
-| Quick blinks come out as dashes | Raise **Time unit t**. |
+| Frowns are missed | Lower **Frown threshold**, use 1280×720, sit closer, and light your face from above or the side. Light straight from the front hides the furrow lines. |
+| Symbols appear without frowning | Raise **Frown threshold**, or press **C** to recalibrate with a relaxed face. |
+| Quick frowns come out as dashes | Raise **Time unit t**. |
 | Letters or words end before you are done | Raise **Time unit t**. |
 | Typing feels slow | Lower **Time unit t**. |
-| Normal blinks add symbols | Press **P** while resting, or **Z** to switch input off. |
 | Input feels slow | Choose 60 FPS in settings. At 30 FPS each frame is 33 ms apart, at 60 FPS only 17 ms. |
-| Left and right are swapped | Turn on **Swap left / right eye**. |
 | Glasses | Usually fine. Strong reflections on the lenses can hide the eyelids, so tilt the screen or the light slightly. |
 | Model download fails | Download the file from the URL in `blink_morse/config.py` and save it as `models/face_landmarker.task`. |
 
@@ -166,17 +163,29 @@ Think of the app as a small assembly line with five stations.
 
 1. **The camera takes pictures.** About 30 to 60 times a second, the webcam sends a new picture of you.
 
-2. **The face reader measures your eyes.** A pre-trained model from Google finds your face and gives each eye a score from 0 (wide open) to 1 (fully shut). Everybody's eyes rest at a slightly different level, so the app first learns what "open" looks like for you, and measures closing from there.
+2. **The face reader finds the spot between your eyebrows.** A pre-trained model from Google places 478 points on your face. The app uses them to cut out the small patch of skin between the inner ends of your eyebrows, and looks for thin, dark, vertical lines there: the furrows that appear when you frown. Everybody has some lines at rest, so the app first learns what your relaxed face looks like and measures only the change.
 
-3. **The blink reader times each blink.** It works like a telegraph key, where the length of each press matters. A short blink is a dot; as soon as a blink lasts longer than one and a half time units, it becomes a dash, without waiting for the eyes to open.
+3. **The frown reader times each frown.** It works like a telegraph key, where the length of each press matters. A short frown is a dot; as soon as a frown lasts longer than one and a half time units, it becomes a dash, without waiting for you to relax.
 
-4. **The Morse translator listens to the silence.** Like a radio operator, it treats a short silence as the end of a letter and a longer one as the end of a word. After three time units with your eyes open, the dots and dashes collected so far are looked up in the international Morse table. After seven, a space is added. If a code does not exist, the app shows a red question mark instead of guessing.
+4. **The Morse translator listens to the silence.** Like a radio operator, it treats a short silence as the end of a letter and a longer one as the end of a word. After three time units with a relaxed face, the dots and dashes collected so far are looked up in the international Morse table. After seven, a space is added. If a code does not exist, the app shows a red question mark instead of guessing.
 
-5. **The screen shows the result.** The camera picture is dimmed and information panels that look like frosted glass float around it. A small label next to each eye shows how open it is, the newest symbol ripples when it lands, and the finished letter pops up and is added to the message at the bottom. A short sound confirms every symbol, so you can type without looking.
+5. **The screen shows the result.** The camera picture is dimmed and information panels that look like frosted glass float around it. A thin frame between your eyebrows shows the furrow lines that were found, the newest symbol ripples when it lands, and the finished letter pops up and is added to the message at the bottom. A short sound confirms every symbol, so you can type without looking.
 
 The app never records or uploads anything. Every picture is processed in memory and thrown away straight after.
 
 ## How it works (technical deep dive)
+
+### Frown signal (`frown.py`)
+
+MediaPipe's landmarks and its `browDown` blendshapes hardly move when most people frown, so the input is measured from the image instead:
+
+1. A face-aligned patch (64 px wide) is cut out between the inner brow ends (landmarks 107 and 336), centred on the glabella (landmark 9), from a little above the brows down to landmark 8. Its scale follows the inner-brow distance, so distance to the camera does not matter.
+2. A morphological black-hat with a 9×1 horizontal kernel on the L channel keeps only dark details thinner than the kernel horizontally, i.e. thin vertical lines. Broad shadows and horizontal forehead lines are ignored.
+3. `energy` = mean response in the middle 70 % of the patch, divided by the median skin brightness, in percent.
+4. A 2-second calibration learns the resting energy `E0` and inner-brow distance `d0`; both keep following slow changes while the face is relaxed.
+5. `score = 0.8 × clip((E − E0) / max(E0, 0.15) / 2) + 0.2 × clip((d0 − d) / d0 / 0.06)`, smoothed with an exponential filter. A score above 0.5 for more than 4 s triggers a recalibration.
+
+The score is fed to the existing press detector (`blinks.py`) as both "eyes", with its own baseline learning switched off, so the dot/dash timing and the letter/word gaps are unchanged.
 
 ### Pipeline
 
@@ -273,7 +282,8 @@ AI_computer_vision_morse_coding/
 │   ├── config.py            constants, colours, saved settings
 │   ├── camera.py            threaded webcam reader
 │   ├── face_tracker.py      MediaPipe wrapper, model download, eye mapping
-│   ├── blinks.py            blink timing detector
+│   ├── frown.py             furrow lines between the eyebrows -> frown score
+│   ├── blinks.py            press timing detector (dot / dash)
 │   ├── morse.py             Morse table and composer state machine
 │   ├── hud.py               everything drawn on top of the camera
 │   ├── draw.py              anti-aliased shapes, glow sprites, easing

@@ -1,8 +1,9 @@
 """
 Everything drawn on top of the camera image.
 
-Apart from two small readouts next to the eyes, nothing is drawn on the
-face; all other feedback lives in the panels around it. The HUD paints
+Apart from a thin frame between the eyebrows (the area measured for the
+frown) and the furrow lines found there, nothing is drawn on the face; all
+other feedback lives in the panels around it. The HUD paints
 into two pygame surfaces every frame:
 
 * `ui`   - transparent layer with text, meters and icons.
@@ -40,8 +41,10 @@ FLASH_TIME = 0.35          # how long a legend row stays lit after an action
 CHIP_SIZE = (66, 28)       # openness readout next to each eye
 CHIP_GAP = 12              # distance between the eye corner and the readout
 
-# Colour of an eye that is closed on its own (a wink types nothing).
+# Colour of a frown that is not (yet) past the threshold.
 WINK_COLOR = (200, 208, 224)
+# Furrow lines while they are not strong enough to count.
+FROWN_COLOR = (251, 113, 133)
 
 
 @dataclass
@@ -69,6 +72,10 @@ class HudState:
     text: str = ""
     muted: bool = False
     show_chart: bool = True
+    # Frown overlay in window pixels: {"box", "contours", "score", "lines",
+    # "calibrating"}, or None while the face is not measured
+    frown: Optional[dict] = None
+    frown_threshold: float = 0.30        # score that counts as frowning
 
 
 @dataclass
@@ -183,7 +190,7 @@ class Hud:
             self.blit(label, (self.size[0] - 16, 16), "topright")
             return
         self._build_panels(state, now)
-        self._draw_eye_chips(state)
+        self._draw_frown_overlay(state)
 
         self._draw_title(state)
         self._draw_legend(state, now)
@@ -281,6 +288,28 @@ class Hud:
     # Panels
     # ------------------------------------------------------------------------
 
+    def _draw_frown_overlay(self, state: HudState) -> None:
+        """Faint frame around the measured area, and a glow above it while frowning."""
+        f = state.frown
+        if not f or not state.face:
+            return
+        pressed = state.pose == "both"
+        color = self._eye_color(state) if pressed else FROWN_COLOR
+        # Only a faint frame is drawn; nothing inside it, so the skin
+        # between the brows (the furrow itself) is always clearly visible.
+        frame = (255, 255, 255, 45) if f["calibrating"] else draw.with_alpha(color, 0.22)
+        if len(f["box"]) == 4:
+            pygame.draw.aalines(self.ui, frame, True, f["box"])
+        if pressed and len(f["box"]) == 4:
+            # The glow sits above the frame, on the forehead, never on the
+            # furrow, so it does not hide how strong the frown is.
+            top = sorted(f["box"], key=lambda p: p[1])[:2]
+            height = max(p[1] for p in f["box"]) - min(p[1] for p in f["box"])
+            cx = (top[0][0] + top[1][0]) / 2
+            cy = (top[0][1] + top[1][1]) / 2 - max(14.0, 0.6 * height)
+            draw.glow(self.glow, color, (cx, cy), 14, 0.55)
+            draw.circle(self.ui, color, (cx, cy), 3)
+
     def _draw_eye_chips(self, state: HudState) -> None:
         """Openness of each eye, as a percentage, beside the eye itself."""
         for side, rect in self._chip_rects(state).items():
@@ -298,7 +327,7 @@ class Hud:
 
     def _draw_title(self, state: HudState) -> None:
         r = self.rect_title
-        self.blit(self.text("semibold", 17, "Blink Morse", TEXT), (r.x + 16, r.y + 10))
+        self.blit(self.text("semibold", 17, "Frown Morse", TEXT), (r.x + 16, r.y + 10))
 
         if state.camera_error:
             dot, msg = DANGER, "Camera unavailable"
@@ -319,10 +348,10 @@ class Hud:
         def sec(v):
             return f"{round(v, 2):g} s"
         return [
-            ("dot", "Short blink", f"< {sec(state.dash_after)}  \u00b7"),
-            ("dash", "Long blink", f"\u2265 {sec(state.dash_after)}  \u2013"),
-            ("letter", f"Open {sec(state.letter_gap)}", "end letter"),
-            ("word", f"Open {sec(state.word_gap)}", "space"),
+            ("dot", "Short frown", f"< {sec(state.dash_after)}  \u00b7"),
+            ("dash", "Long frown", f"\u2265 {sec(state.dash_after)}  \u2013"),
+            ("letter", f"Relax {sec(state.letter_gap)}", "end letter"),
+            ("word", f"Relax {sec(state.word_gap)}", "space"),
         ]
 
     def _draw_legend(self, state: HudState, now: float) -> None:
@@ -348,33 +377,35 @@ class Hud:
                       (r.right - 14, cy), "midright")
 
     def _draw_meters(self, state: HudState) -> None:
-        """Two bars showing how open each eye is, with the threshold marked."""
+        """Frown score on a bar, with the threshold marked."""
         r = self.rect_meters
-        self.blit(self.label("Eye openness"), (r.x + 16, r.y + 12))
-        x0, x1 = r.x + 62, r.right - 62
-        for i, side in enumerate(("right", "left")):
-            cy = r.y + 40 + i * 24
-            color = self._eye_color(state) if state.face and \
-                state.openness.get(side, 1.0) < state.open_threshold else ACTION_COLORS["dot"]
-            value = state.openness.get(side, 1.0) if state.face else 0.0
-            closed = state.face and value < state.open_threshold
+        self.blit(self.label("Frown"), (r.x + 16, r.y + 12))
+        f = state.frown if state.face else None
+        score = f["score"] if f else 0.0
+        pressed = bool(f) and state.pose == "both"
+        color = self._eye_color(state) if pressed else FROWN_COLOR
 
-            self.blit(self.text("medium", 12, side.capitalize(), TEXT),
-                      (r.x + 16, cy), "midleft")
-            track = pygame.Rect(x0, cy - 3, x1 - x0, 6)
-            draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 3)
-            fill = track.copy()
-            fill.w = max(6, round(track.w * value))
-            draw.rounded_rect(self.ui, draw.with_alpha(color, 0.75), fill, 3)
-            if closed:
-                draw.glow(self.glow, color, (x0 + 4, cy), 16, 0.7)
+        cy = r.y + 40
+        x0, x1 = r.x + 16, r.right - 62
+        track = pygame.Rect(x0, cy - 3, x1 - x0, 6)
+        draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 3)
+        fill = track.copy()
+        fill.w = max(6, round(track.w * min(1.0, score)))
+        draw.rounded_rect(self.ui, draw.with_alpha(color, 0.75), fill, 3)
+        if pressed:
+            draw.glow(self.glow, color, (fill.right - 3, cy), 16, 0.7)
+        tx = x0 + track.w * state.frown_threshold
+        draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
+        self.blit(self.text("mono", 13, f"{round(score * 100):3d}%",
+                            color if pressed else TEXT), (r.right - 14, cy), "midright")
 
-            tx = x0 + track.w * state.open_threshold
-            draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
-
-            status = "closed" if closed else f"{round(value * 100)}%"
-            self.blit(self.text("regular", 11, status, color if closed else TEXT_MUTED),
-                      (r.right - 14, cy), "midright")
+        if not f:
+            hint, hint_color = "look at the camera", TEXT_MUTED
+        elif f["calibrating"]:
+            hint, hint_color = "calibrating, keep your face relaxed", WARNING
+        else:
+            hint, hint_color = f"counts from {round(state.frown_threshold * 100)}%  (C recalibrate)", TEXT_MUTED
+        self.blit(self.text("regular", 11, hint, hint_color), (r.x + 16, cy + 22), "midleft")
 
     def _draw_fps(self, state: HudState) -> None:
         r = self.rect_fps
@@ -489,7 +520,7 @@ class Hud:
                                 WARNING), (x0, cy), "midleft")
         else:
             self.blit(self.text("regular", 14,
-                                "Short blink for a dot, long blink for a dash",
+                                "Short frown for a dot, long frown for a dash",
                                 TEXT_FAINT), (x0 + shake, cy), "midleft")
 
         # Divider
@@ -593,7 +624,7 @@ class Hud:
 
         left = right - 56
         if char is not None:
-            self.blit(self.text("regular", 12, "keep eyes open to confirm", TEXT_MUTED),
+            self.blit(self.text("regular", 12, "relax your face to confirm", TEXT_MUTED),
                       (left, cy), "midright")
         elif options:
             preview = "  ".join(options[:6]) + ("  \u2026" if len(options) > 6 else "")
@@ -604,7 +635,8 @@ class Hud:
     def _draw_key_hints(self, right: float, cy: float, state: HudState) -> None:
         hints = [("X", "settings"), ("Z", "hide UI"),
                  ("P", "resume" if state.paused else "pause"),
-                 ("H", "chart"), ("M", "sound off" if state.muted else "sound")]
+                 ("H", "chart"), ("C", "recalibrate"),
+                 ("M", "sound off" if state.muted else "sound")]
         x = right
         for key, text in reversed(hints):
             label = self.text("regular", 11, text, TEXT_MUTED)

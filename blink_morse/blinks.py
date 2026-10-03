@@ -1,7 +1,10 @@
 """
-Turns two eye-closure scores per frame into Morse dots and dashes, using
-the length of each blink, the same way a telegraph key uses the length of
-each press.
+Turns two scores per frame into Morse dots and dashes, using the length of
+each "press", the same way a telegraph key uses the length of each press.
+
+The app now feeds the frown score (see frown.py) as both scores, so a
+"blink" in this module means "frowning past the threshold" and "open"
+means "face relaxed". The timing logic is the same as for blinks.
 
 Signals
 -------
@@ -176,7 +179,11 @@ class BlinkDetector:
 
     def _hysteresis(self, value: float, was_closed: bool) -> bool:
         if was_closed:
-            return value > self.close_threshold - self.RELEASE_GAP
+            # With a low threshold a fixed gap would put the release level
+            # at or below zero and a press could never end, so the gap is
+            # capped at half the threshold.
+            gap = min(self.RELEASE_GAP, self.close_threshold * 0.5)
+            return value > self.close_threshold - gap
         return value > self.close_threshold
 
     def _classify(self) -> str:
