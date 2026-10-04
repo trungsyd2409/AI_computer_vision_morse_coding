@@ -76,6 +76,40 @@ def arc(surface, color, center, radius: float, start: float, sweep: float,
     pygame.draw.aalines(surface, color, True, points)
 
 
+def bone(surface, color, a, b, width: float = 6.0) -> None:
+    """Thick anti-aliased segment with round ends, used for the arm skeleton."""
+    ax, ay = float(a[0]), float(a[1])
+    bx, by = float(b[0]), float(b[1])
+    dx, dy = bx - ax, by - ay
+    length = math.hypot(dx, dy)
+    r = width / 2.0
+    if length > 1e-3:
+        nx, ny = -dy / length * r, dx / length * r
+        points = [(ax + nx, ay + ny), (bx + nx, by + ny),
+                  (bx - nx, by - ny), (ax - nx, ay - ny)]
+        pygame.draw.polygon(surface, color, points)
+        pygame.draw.aalines(surface, color, True, points)
+    circle(surface, color, (ax, ay), r)
+    circle(surface, color, (bx, by), r)
+
+
+def wedge(surface, color, center, radius: float, a_from: float, a_to: float,
+          segments: int = 32) -> None:
+    """
+    Filled pie slice between two screen-space angles (radians, atan2 of
+    dx, dy), taking the short way round. Used for the elbow angle.
+    """
+    sweep = (a_to - a_from + math.pi) % (2 * math.pi) - math.pi
+    steps = max(2, int(segments * abs(sweep) / (2 * math.pi)) + 1)
+    cx, cy = float(center[0]), float(center[1])
+    points = [(cx, cy)]
+    for i in range(steps + 1):
+        a = a_from + sweep * i / steps
+        points.append((cx + math.cos(a) * radius, cy + math.sin(a) * radius))
+    if len(points) >= 3:
+        pygame.draw.polygon(surface, color, points)
+
+
 # ---------------------------------------------------------------------------
 # Soft glow sprites for the additive glow layer
 # ---------------------------------------------------------------------------

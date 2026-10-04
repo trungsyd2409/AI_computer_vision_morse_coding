@@ -1,3 +1,3 @@
-"""Blink Morse: type Morse code with eye blinks using a webcam."""
+"""Curl Morse: type Morse code with arm curls (elbow angle) using a webcam."""
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"

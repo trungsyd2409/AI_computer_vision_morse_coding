@@ -1,6 +1,6 @@
-# Blink Morse
+# Curl Morse
 
-Type Morse code with your eyes, the way a telegraph operator uses a key: a short blink is a dot, a long blink is a dash, and keeping your eyes open marks the end of a letter or a word. Everything is timed in one adjustable unit, and the decoded text appears on screen as you go, no hands needed.
+Type Morse code with your arm, like doing dumbbell curls at the gym: a short curl is a dot, a long curl is a dash, and holding the arm straight marks the end of a letter or a word. Only the **right arm** types; the **left hand is the switch**: make a fist to turn typing on, open the hand to turn it off. Press **S** to swap the two roles. The app measures the elbow angle with MediaPipe Pose, reads the fist with MediaPipe Hands, and draws the typing arm's skeleton and the switch hand's 21-point skeleton on the camera image.
 
 ![Interface preview](docs/preview.png)
 <sub>Interface preview, rendered with a placeholder camera image.</sub>
@@ -48,7 +48,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-On the first launch the face tracking model (`face_landmarker.task`, about 3.7 MB) is downloaded into `models/`. Later launches work offline.
+On the first launch the pose model (`pose_landmarker_lite.task`, about 5.5 MB) is downloaded into `models/` (the hand model `hand_landmarker.task` is already there, or is downloaded too). Later launches work offline.
 
 ### 4. Run the tests (optional)
 
@@ -62,44 +62,45 @@ The tests cover the Morse logic, the blink detector and the left/right eye mappi
 
 ## How to use it
 
-Sit facing the camera with your face well lit and blink with **both eyes**. All timings come from one time unit **t** (0.1 s by default, adjustable in the settings window):
+Stand or sit so that your right **shoulder, elbow and wrist** and your **left hand** are in view.
 
-| Eyes | Result | With t = 0.1 s |
+**Switch hand (left).** Fist = typing on (the hand skeleton turns green, label "FIST on"). Open hand or hand out of view = typing off: you can move the right arm freely and nothing is typed. When you close the fist with the right arm already raised, lower it once first; then curls count.
+
+**Typing arm (right).** Curl it the way you would lift a dumbbell.
+
+**Swap hands.** Press **S** (or use *Typing arm* in the Arm settings tab) to type with the left arm and switch with the right hand. The choice is saved. All timings come from one time unit **t** (0.5 s by default, adjustable in the settings window):
+
+| Arm | Result | With t = 0.5 s |
 |---|---|---|
-| **Short blink**, shorter than 1.5 t | Dot `·` | under 0.15 s |
-| **Long blink**, 1.5 t or longer | Dash `–` | 0.15 s or more |
-| **Eyes open for 3 t** | End of letter, the Latin letter pops up | 0.3 s |
-| **Eyes open for 7 t** | End of word, a space is added | 0.7 s |
+| **Short curl**, shorter than 1.5 t | Dot `·` | under 0.75 s |
+| **Long curl**, held 1.5 t or longer | Dash `–` | 0.75 s or more |
+| **Arm straight for 5 t** | End of letter, the Latin letter pops up | 2.5 s |
+| **Arm straight for 7 t** | End of word, a space is added | 3.5 s |
 
-These are the same ratios as classic Morse code, where silences separate letters and words. A dash is typed the moment the blink reaches 1.5 t, while your eyes are still closed, so it never waits for you to open them. A dot can only be known once your eyes open. Winking with one eye does nothing.
+**Curl score.** The elbow angle is turned into a curl score: about 170° (straight arm) = 0 %, about 45° (fully curled) = 100 %. The arm counts as curled above the **curl threshold** (50 % ≈ 107°) and as straight again once it drops 10 % below it, so a shaky arm near the threshold does not type twice. The angle comes from MediaPipe's 3D world landmarks, so it still works when your forearm points partly towards the camera.
 
-While your eyes are closed, a small outline appears after the current symbols and stretches from a dot towards a dash, and a ring next to the current letter counts down to the end of the letter once your eyes are open again.
+A dash is typed the moment the curl reaches 1.5 t, while the arm is still up. A dot is typed when the arm comes back down.
 
-**Openness readouts.** A small glass label next to each eye shows how open that eye is, from 0 % (shut) to 100 % (your normal open eye). While both eyes are closed the labels light up cyan (the blink would be a dot) and turn violet once it has become a dash. The same values are shown as bars in the Eye openness panel, where the white tick marks the point below which an eye counts as closed.
+**Arm skeleton.** Each visible arm is drawn as glowing bones with a filled wedge showing the elbow angle, and a readout of the angle in degrees next to the elbow. The arm that is curling lights up cyan (would be a dot) and turns violet once it has become a dash. The Arm curl panel shows both arms as bars, with the white tick at the threshold.
 
-**Example: typing "HI"**
+**Example: typing "HI"** (t = 0.5 s)
 
-1. Blink quickly four times (`····`), then keep your eyes open. **H** pops up after 0.3 s.
-2. Blink quickly twice (`··`) and keep your eyes open. **I** pops up.
-3. Keep them open a little longer (0.7 s in total) and a space is added.
+1. Do four quick curls (`····`), then keep the arm straight. **H** pops up after 2.5 s.
+2. Do two quick curls (`··`) and keep the arm straight. **I** pops up.
+3. Keep it straight a little longer (3.5 s in total) and a space is added.
 
-**Choosing t.** With 0.1 s everything is fast, which suits practised users. If letters end before you have finished them, or quick blinks come out as dashes, raise **t** to 0.15 or 0.2 s. The settings window shows what every rule means in seconds for the current value.
+**Choosing t.** If quick curls come out as dashes, raise **t**; if letters end too slowly, lower it. The slider goes from 0.1 to 1.5 s and the settings window spells out every rule in seconds.
 
-**Normal blinks.** People blink without thinking 15 to 20 times a minute, and those blinks are read as dots or dashes too. Press **P** to pause listening whenever you want to rest your eyes, or **Z** to hide the interface and stop input completely.
-
-**Hiding the interface.** Press **Z** to hide every panel and show the camera image with its normal colours. While the interface is hidden, face tracking and typing are switched off. Press **Z** again to bring everything back.
-
-Deleting is done on the keyboard.
-
-While a letter is in progress, the chart on the right dims every character you can no longer reach and highlights the exact match, so you never need to memorise the whole alphabet.
+Press **P** to pause listening while you rest, or **Z** to hide the interface and stop input completely. Deleting is done on the keyboard.
 
 ### Keyboard shortcuts
 
 | Key | Action |
 |---|---|
+| `S` | Swap hands: which arm types and which hand is the fist switch |
 | `X` | Open or close the settings window |
 | `Z` | Hide or show the interface. Hidden = normal camera colours and no typing |
-| `P` | Pause or resume listening to your eyes |
+| `P` | Pause or resume listening to your arm |
 | `H` | Show or hide the Morse chart |
 | `M` | Mute or unmute sounds |
 | `Backspace` | Delete the last symbol, or the last letter if no symbol is pending |
@@ -117,10 +118,10 @@ Press `X` to open it. It has two tabs. Changes apply instantly and are saved to 
 - Device number, with the device name underneath on Windows (for example "Integrated Webcam" or "Camo"), resolution, target FPS (30 or 60), mirror view, auto exposure, and manual exposure, brightness, contrast and gain.
 - **Driver settings** (Windows) opens the camera maker's own settings dialog.
 
-**Eyes tab**
-- **Close threshold**: how closed an eye must be to count. An eye counts as closed when its openness drops below `1 - close threshold` (55 % by default), marked by the white tick on the openness bars.
-- **Time unit t**: the base timing, from 0.05 to 0.5 s. A card below the slider spells out the dot, dash, letter and space timings for the current value.
-- **Swap left / right eye**: for cameras or phone apps that already mirror the image. It only affects which label sits next to which eye.
+**Arm tab**
+- **Curl threshold**: how curled the arm must be to count (5 % to 95 %, default 50 %), marked by the white tick on the curl bars.
+- **Time unit t**: the base timing, from 0.1 to 1.5 s. A card below the slider spells out the dot, dash, letter and space timings for the current value.
+- **Swap left / right arm**: for cameras or phone apps that already mirror the image. It only affects the Left / Right labels.
 
 ### Using an iPhone or Android phone as the camera
 
@@ -272,8 +273,11 @@ AI_computer_vision_morse_coding/
 │   ├── app.py               main loop, wires everything together
 │   ├── config.py            constants, colours, saved settings
 │   ├── camera.py            threaded webcam reader
-│   ├── face_tracker.py      MediaPipe wrapper, model download, eye mapping
-│   ├── blinks.py            blink timing detector
+│   ├── arm_tracker.py       MediaPipe Pose wrapper, elbow angle, arm mapping
+│   ├── curls.py             curl timing detector (dot / dash)
+│   ├── hand_tracker.py      MediaPipe Hands wrapper, fist / open-hand switch
+│   ├── face_tracker.py      old face input (no longer used by the app)
+│   ├── blinks.py            old blink detector (no longer used by the app)
 │   ├── morse.py             Morse table and composer state machine
 │   ├── hud.py               everything drawn on top of the camera
 │   ├── draw.py              anti-aliased shapes, glow sprites, easing
@@ -281,12 +285,12 @@ AI_computer_vision_morse_coding/
 │   ├── audio.py             synthesised feedback sounds
 │   └── settings_window.py   settings window (separate process)
 ├── assets/fonts/            Inter and JetBrains Mono (OFL)
-├── models/                  face model, downloaded on first run
+├── models/                  pose model, downloaded on first run
 ├── docs/                    screenshots for this README
 └── tests/                   unit tests for Morse logic and blinks
 ```
 
 ## Credits
 
-- Face tracking model: Google MediaPipe, Apache License 2.0.
+- Pose and face tracking models: Google MediaPipe, Apache License 2.0.
 - Fonts: Inter by Rasmus Andersson and JetBrains Mono by JetBrains, both under the SIL Open Font License 1.1 (licence files in `assets/fonts`).

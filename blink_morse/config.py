@@ -26,12 +26,24 @@ FACE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/latest/face_landmarker.task"
 )
+# Hand model used to read the open hand / fist that switches typing on.
+HAND_MODEL_PATH = MODELS_DIR / "hand_landmarker.task"
+HAND_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+    "hand_landmarker/float16/latest/hand_landmarker.task"
+)
+# Body pose model used to measure the elbow angle (about 5.5 MB).
+POSE_MODEL_PATH = MODELS_DIR / "pose_landmarker_lite.task"
+POSE_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
+    "pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
+)
 
 # ---------------------------------------------------------------------------
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Brow Morse"
+APP_TITLE = "Curl Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -45,15 +57,15 @@ TEXT_MUTED = (150, 160, 178)
 TEXT_FAINT = (98, 108, 126)
 ACCENT = (103, 232, 249)          # cyan, used for the primary highlight
 SUCCESS = (74, 222, 128)
-BROW_DOT = (34, 197, 94)          # small green marker drawn on each eyebrow
+BONE = (226, 232, 240)            # arm skeleton when the arm is extended
 WARNING = (251, 191, 36)
 DANGER = (251, 113, 133)
 
 # One colour per action so the legend, the meters, the typed symbols and
 # the pause countdown all speak the same visual language.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # short brow-raise
-    "dash": (167, 139, 250),      # long brow-raise
+    "dot": (103, 232, 249),       # short curl
+    "dash": (167, 139, 250),      # long curl
     "letter": (251, 191, 36),     # short pause -> end of letter
     "word": (74, 222, 128),       # long pause  -> space
 }
@@ -87,18 +99,26 @@ class CameraSettings:
 
 
 @dataclass
-class EyeSettings:
-    """Threshold and timing for reading blinks."""
+class ArmSettings:
+    """Threshold and timing for reading dumbbell curls."""
 
-    # Brow-raise is a 0..1 score after removing the user's own resting
-    # level. Above `close_threshold` a brow counts as raised ("pressed").
-    # Adjustable from 5% to 95% in the settings window.
-    close_threshold: float = 0.35
+    # Curl is a 0..1 score from the elbow angle: 0 = arm straight (about
+    # 170 deg), 1 = fully curled (about 45 deg). Above `curl_threshold` the
+    # arm counts as curled ("pressed"). Adjustable from 5% to 95%.
+    curl_threshold: float = 0.50
     # The Morse time unit t, in seconds. Everything is derived from it:
-    # brows up < 1.5 t = dot, >= 1.5 t = dash, relaxed 3 t = end of
-    # letter, relaxed 7 t = end of word.
-    time_unit: float = 0.10
-    swap_eyes: bool = False           # fixes cameras that mirror the image
+    # curled < 1.5 t = dot, >= 1.5 t = dash, arm extended 5 t = end of
+    # letter, extended 7 t = end of word. A real curl takes about half a
+    # second, so t defaults much longer than it did for blinks.
+    time_unit: float = 0.50
+    swap_arms: bool = False           # fixes cameras that mirror the image
+    # Which arm curls to type. The other hand is the switch: fist = typing
+    # on, open hand = typing off. S swaps the two roles.
+    curl_side: str = "right"
+
+    @property
+    def gate_side(self) -> str:
+        return "left" if self.curl_side == "right" else "right"
 
     @property
     def dash_after(self) -> float:
@@ -106,7 +126,7 @@ class EyeSettings:
 
     @property
     def letter_gap(self) -> float:
-        return 3.0 * self.time_unit
+        return 5.0 * self.time_unit
 
     @property
     def word_gap(self) -> float:
@@ -116,7 +136,7 @@ class EyeSettings:
 @dataclass
 class AppSettings:
     camera: CameraSettings = field(default_factory=CameraSettings)
-    eyes: EyeSettings = field(default_factory=EyeSettings)
+    arm: ArmSettings = field(default_factory=ArmSettings)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -132,7 +152,7 @@ class AppSettings:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             return settings
-        for name in ("camera", "eyes"):
+        for name in ("camera", "arm"):
             section = getattr(settings, name)
             saved = data.get(name, {})
             for f in fields(section):

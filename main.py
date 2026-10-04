@@ -1,6 +1,7 @@
 """
-Brow Morse - type Morse code by raising your eyebrows in front
-of a webcam. Short raise = dot, long raise = dash.
+Curl Morse - type Morse code with dumbbell-style arm curls in front of a
+webcam. Short curl = dot, long curl = dash, keep the arm straight to end
+a letter (5 t) or a word (7 t).
 
 Run:  python main.py
 Keys: X settings, Z hide UI, P pause listening, H toggle chart, M mute,
