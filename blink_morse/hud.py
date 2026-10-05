@@ -1,10 +1,10 @@
 """
 Everything drawn on top of the camera image.
 
-The typing arm is drawn as a glowing skeleton (shoulder - elbow - wrist,
-no hand bones) with the elbow angle marked and a readout next to
-the elbow. The switch hand is drawn as a 21-point hand skeleton: green
-while it is a fist (typing on), grey while it is open (typing off). All other feedback lives in the panels around the image.
+The whole body is drawn as a thin, small skeleton (head circle, torso,
+arms, legs) so the pose is easy to recognise without covering the image.
+It lights up cyan while the body is down (a dot so far) and violet once
+the push-up has become a dash. All other feedback lives in the panels.
 The HUD paints into two pygame surfaces every frame:
 
 * `ui`   - transparent layer with text, meters and icons.
@@ -18,7 +18,7 @@ camera behind a panel is far cheaper on the graphics card.
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import pygame
@@ -26,7 +26,7 @@ import pygame
 from . import draw
 from .config import (ACCENT, ACTION_COLORS, DANGER, FONTS_DIR, MIN_ACCEPTABLE_FPS,
                      BONE, SUCCESS, TEXT, TEXT_FAINT, TEXT_MUTED, WARNING)
-from .hand_tracker import FINGERTIPS, HAND_CONNECTIONS
+from .arm_tracker import BODY_CONNECTIONS
 from .morse import MORSE_TABLE, candidates, decode
 
 # Characters shown in the reference chart, laid out column by column.
@@ -40,8 +40,6 @@ PUNCTUATION_HINT = ". , ? ! ' / ( ) : = + - @"
 UI_CLEAR = (232, 236, 244, 0)
 
 FLASH_TIME = 0.35          # how long a legend row stays lit after an action
-CHIP_SIZE = (58, 26)       # elbow angle readout next to each elbow
-CHIP_GAP = 26              # distance between the elbow and the readout
 
 
 @dataclass
@@ -50,30 +48,22 @@ class HudState:
 
     fps: float = 0.0
     camera_error: Optional[str] = None
-    body: bool = False                   # at least one arm is being tracked
-    # 0 = arm straight, 1 = fully curled
-    curl: dict = field(default_factory=lambda: {"left": 0.0, "right": 0.0})
-    angle: dict = field(default_factory=lambda: {"left": None, "right": None})
-    visible: dict = field(default_factory=lambda: {"left": False, "right": False})
-    active: Optional[str] = None         # arm driving the key while curled
-    # Window pixels of shoulder, elbow, wrist, pinky, index, thumb, or None
-    arms: dict = field(default_factory=dict)
-    threshold: float = 0.5               # above this the arm counts as curled
-    release_threshold: float = 0.4       # below this it counts as extended
-    pressed: bool = False                # inside a curl
-    pressed_time: float = 0.0            # length of the current curl so far
-    curl_side: str = "right"             # arm that types
-    gate_side: str = "left"              # hand that switches typing on / off
-    armed: bool = False                  # switch hand is a fist
-    hand_visible: bool = False
-    hand: Optional[list] = None          # switch-hand landmarks in window pixels
+    body: bool = False                   # a person is being tracked
+    angle: Optional[float] = None        # mean elbow angle of the visible arms
+    depth: float = 0.0                   # 0 = up (arms straight), 1 = chest down
+    # 33 pose landmarks as (x, y, visibility) in window pixels, or None
+    skeleton: Optional[list] = None
+    threshold: float = 0.5               # above this the body counts as down
+    release_threshold: float = 0.4       # below this it counts as up again
+    pressed: bool = False                # body is down
+    pressed_time: float = 0.0            # how long it has been down so far
     paused: bool = False                 # input ignored until P is pressed
     pause_kind: Optional[str] = None     # "letter", "space" or None
     pause_progress: float = 0.0          # 0..1 towards `pause_kind`
     pause_left: float = 0.0              # seconds until it happens
-    dash_after: float = 0.75             # curl length that makes a dash
-    letter_gap: float = 2.5
-    word_gap: float = 3.5
+    dash_after: float = 0.9              # time down that makes a dash
+    letter_gap: float = 1.8
+    word_gap: float = 3.0
     code: str = ""
     text: str = ""
     muted: bool = False
@@ -164,9 +154,6 @@ class Hud:
         self._bottom_flash = (now, ACTION_COLORS["letter"])
 
 
-    def on_swap(self, curl_side: str, now: float) -> None:
-        self._pops.append((f"{curl_side} arm types", ACCENT, now, 34))
-
     def on_space(self, now: float) -> None:
         self._pops.append(("space", ACTION_COLORS["word"], now, 40))
         self._flash["word"] = now
@@ -195,9 +182,7 @@ class Hud:
             self.blit(label, (self.size[0] - 16, 16), "topright")
             return
         self._build_panels(state, now)
-        self._draw_hand(state)
-        self._draw_arms(state)
-        self._draw_angle_chips(state)
+        self._draw_skeleton(state)
 
         self._draw_title(state)
         self._draw_legend(state, now)
@@ -224,47 +209,11 @@ class Hud:
             self.panels.append(Panel(self.rect_chart))
         if state.camera_error:
             self.panels.append(Panel(self.rect_error, 0.6, DANGER))
-        # Glass readouts next to the elbows; the border lights up while that
-        # arm is curled, in the colour of the action it is about to trigger.
-        for side, rect in self._chip_rects(state).items():
-            on = self._is_pressing(state, side)
-            self.panels.append(Panel(rect, 0.9 if on else 0.0, self._arm_color(state, side)))
-        hand_rect = self._hand_chip_rect(state)
-        if hand_rect is not None:
-            self.panels.append(Panel(hand_rect, 0.8 if state.armed else 0.0, SUCCESS))
-
-    @staticmethod
-    def _is_pressing(state: HudState, side: str) -> bool:
-        return state.pressed and state.active == side
 
     @staticmethod
     def _press_color(state: HudState) -> tuple:
-        """What the curl will type if the arm extends now: dot, then dash."""
+        """What the push-up will type if the body comes up now: dot, then dash."""
         return ACTION_COLORS["dash" if state.pressed_time >= state.dash_after else "dot"]
-
-    def _arm_color(self, state: HudState, side: str) -> tuple:
-        if self._is_pressing(state, side):
-            return self._press_color(state)
-        if not state.armed:
-            return TEXT_FAINT
-        return ACCENT if state.curl.get(side, 0.0) > state.release_threshold else BONE
-
-    def _chip_rects(self, state: HudState) -> dict:
-        """Place each angle readout beside its elbow, on the outer side."""
-        if not state.body:
-            return {}
-        rects = {}
-        w = self.size[0]
-        for side, pts in state.arms.items():
-            if not pts or side != state.curl_side:
-                continue
-            (sx, _), (ex, ey) = pts[0], pts[1]
-            dx = ex - sx
-            direction = (1 if dx > 0 else -1) if abs(dx) > 8 else (1 if ex > w / 2 else -1)
-            rect = pygame.Rect((0, 0), CHIP_SIZE)
-            rect.center = (round(ex + direction * (CHIP_GAP + CHIP_SIZE[0] / 2)), round(ey))
-            rects[side] = rect
-        return rects
 
     # ------------------------------------------------------------------------
     # Text helpers
@@ -307,109 +256,70 @@ class Hud:
     # Panels
     # ------------------------------------------------------------------------
 
-    HAND_CHIP = (84, 24)
-
-    def _hand_chip_rect(self, state: HudState):
-        """Readout under the switch hand's wrist."""
-        if not state.hand:
-            return None
-        wx, wy = state.hand[0]
-        rect = pygame.Rect((0, 0), self.HAND_CHIP)
-        rect.midtop = (round(wx), round(wy + 18))
-        rect.clamp_ip(pygame.Rect(0, 0, *self.size))
-        return rect
-
-    def _draw_hand(self, state: HudState) -> None:
-        """21-point skeleton of the switch hand: green fist = on, grey = off."""
-        pts = state.hand
+    def _draw_skeleton(self, state: HudState) -> None:
+        """
+        Thin whole-body skeleton: small head circle, torso, arms, legs.
+        Kept deliberately light (1.5 px bones, 2.5 px joints) so it is easy
+        to recognise without hiding the camera image. Joints MediaPipe is
+        unsure about are skipped.
+        """
+        pts = state.skeleton
         if not pts:
             return
-        color = SUCCESS if state.armed else BONE
-        alpha = 0.95 if state.armed else 0.6
-        for a, b in HAND_CONNECTIONS:
-            pygame.draw.line(self.glow, draw.scale_rgb(color, 0.45 if state.armed else 0.18),
-                             (round(pts[a][0]), round(pts[a][1])),
-                             (round(pts[b][0]), round(pts[b][1])), 4)
-            draw.bone(self.ui, draw.with_alpha(color, alpha), pts[a], pts[b], 2)
-        for i, p in enumerate(pts):
-            r = 4 if i in FINGERTIPS or i == 0 else 3
-            draw.circle(self.ui, (12, 16, 24, 230), p, r)
-            draw.ring(self.ui, draw.with_alpha(color, alpha), p, r, 1)
-        rect = self._hand_chip_rect(state)
-        if rect is not None:
-            text = "FIST on" if state.armed else "OPEN off"
-            label = self.text("mono", 12, text, SUCCESS if state.armed else TEXT_MUTED)
-            self.blit(label, rect.center, "center")
+        if state.pressed and not state.paused:
+            color, alpha, glow_k = self._press_color(state), 0.95, 0.5
+        else:
+            color, alpha, glow_k = BONE, 0.75, 0.15
 
-    def _draw_arms(self, state: HudState) -> None:
-        """
-        Skeleton of the typing arm only: shoulder - elbow - wrist as glowing
-        bones, joints as rings, and the elbow angle as a filled wedge.
-        No hand bones on this arm (the hand skeleton belongs to the switch
-        hand), and no skeleton for the other arm.
-        """
-        if not state.body:
-            return
-        arms = {side: pts for side, pts in state.arms.items()
-                if pts and side == state.curl_side}
+        def ok(i):
+            return pts[i][2] >= 0.5
 
-        for side, pts in arms.items():
-            shoulder, elbow, wrist = pts[:3]
-            color = self._arm_color(state, side)
-            pressing = self._is_pressing(state, side)
-            lead = pressing or state.active is None
-            alpha = 0.95 if lead else 0.55
-
-            # Glow layer: the GPU blurs these thick strokes into neon light.
-            glow_k = 0.75 if pressing else 0.35
-            for a, b in ((shoulder, elbow), (elbow, wrist)):
-                pygame.draw.line(self.glow, draw.scale_rgb(color, glow_k),
-                                 (round(a[0]), round(a[1])), (round(b[0]), round(b[1])), 5)
-
-            # Elbow angle wedge, between the two bones.
-            ang_up = math.atan2(shoulder[1] - elbow[1], shoulder[0] - elbow[0])
-            ang_fore = math.atan2(wrist[1] - elbow[1], wrist[0] - elbow[0])
-            fill = 0.32 if pressing else 0.16
-            draw.wedge(self.ui, draw.with_alpha(color, fill), elbow, 34, ang_up, ang_fore)
-
-            # Bones
-            draw.bone(self.ui, draw.with_alpha(color, alpha), shoulder, elbow, 3.5)
-            draw.bone(self.ui, draw.with_alpha(color, alpha), elbow, wrist, 3)
-
-            # Joints
-            for point, r in ((shoulder, 7), (elbow, 8), (wrist, 6)):
-                draw.circle(self.ui, (12, 16, 24, 230), point, r)
-                draw.ring(self.ui, draw.with_alpha(color, 1.0 if lead else 0.7), point, r, 2)
-            draw.circle(self.ui, color, elbow, 3)
-            draw.glow(self.glow, color, elbow, 22 if pressing else 14,
-                      0.9 if pressing else 0.45)
-
-    def _draw_angle_chips(self, state: HudState) -> None:
-        """Elbow angle in degrees beside each elbow."""
-        for side, rect in self._chip_rects(state).items():
-            angle = state.angle.get(side)
-            if angle is None:
+        for a, b in BODY_CONNECTIONS:
+            if not (ok(a) and ok(b)):
                 continue
-            on = self._is_pressing(state, side)
-            color = self._arm_color(state, side)
-            label = self.text("mono", 13, f"{round(angle):3d}\u00b0",
-                              color if on else TEXT)
-            self.blit(label, rect.center, "center")
+            pa, pb = pts[a][:2], pts[b][:2]
+            pygame.draw.line(self.glow, draw.scale_rgb(color, glow_k),
+                             (round(pa[0]), round(pa[1])), (round(pb[0]), round(pb[1])), 3)
+            draw.bone(self.ui, draw.with_alpha(color, alpha), pa, pb, 1.5)
+        joints = (11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28)
+        for i in joints:
+            if ok(i):
+                draw.circle(self.ui, draw.with_alpha(color, alpha), pts[i][:2], 2.5)
+
+        # Head: a small ring around the nose, sized from the ear distance.
+        if ok(0):
+            nose = pts[0][:2]
+            ears = [pts[i][:2] for i in (7, 8) if ok(i)]
+            if len(ears) == 2:
+                r = max(6.0, math.dist(ears[0], ears[1]) * 0.6)
+            elif ears:
+                r = max(6.0, math.dist(ears[0], nose) * 1.1)
+            else:
+                r = 10.0
+            draw.ring(self.ui, draw.with_alpha(color, alpha), nose, r, 1)
+            # Neck: nose ring to the middle of the shoulders.
+            if ok(11) and ok(12):
+                mid = ((pts[11][0] + pts[12][0]) / 2, (pts[11][1] + pts[12][1]) / 2)
+                d = math.dist(nose, mid)
+                if d > r:
+                    k = r / d
+                    start = (nose[0] + (mid[0] - nose[0]) * k, nose[1] + (mid[1] - nose[1]) * k)
+                    draw.bone(self.ui, draw.with_alpha(color, alpha), start, mid, 1.5)
 
     def _draw_title(self, state: HudState) -> None:
         r = self.rect_title
-        self.blit(self.text("semibold", 17, "Curl Morse", TEXT), (r.x + 16, r.y + 10))
+        self.blit(self.text("semibold", 17, "Push-up Morse", TEXT), (r.x + 16, r.y + 10))
 
         if state.camera_error:
             dot, msg = DANGER, "Camera unavailable"
         elif state.paused:
             dot, msg = WARNING, "Paused, press P to listen"
-        elif state.body and state.armed:
+        elif state.body and state.angle is not None:
             dot, msg = SUCCESS, "Listening"
-        elif not state.armed:
-            dot, msg = WARNING, f"Make a {state.gate_side}-hand fist to type"
+        elif state.body:
+            dot, msg = WARNING, "Arms not visible, turn side-on"
         else:
-            dot, msg = TEXT_FAINT, f"Show your {state.curl_side} arm"
+            dot, msg = TEXT_FAINT, "Get into push-up position"
 
         cy = r.y + 43
         draw.circle(self.ui, dot, (r.x + 20, cy), 3.5)
@@ -421,10 +331,10 @@ class Hud:
         def sec(v):
             return f"{round(v, 2):g} s"
         return [
-            ("dot", "Short curl", f"< {sec(state.dash_after)}  \u00b7"),
-            ("dash", "Long curl", f"\u2265 {sec(state.dash_after)}  \u2013"),
-            ("letter", f"Straight {sec(state.letter_gap)}", "end letter"),
-            ("word", f"Straight {sec(state.word_gap)}", "space"),
+            ("dot", "Down short", f"< {sec(state.dash_after)}  \u00b7"),
+            ("dash", "Down long", f"\u2265 {sec(state.dash_after)}  \u2013"),
+            ("letter", f"Up {sec(state.letter_gap)}", "end letter"),
+            ("word", f"Up {sec(state.word_gap)}", "space"),
         ]
 
     def _draw_legend(self, state: HudState, now: float) -> None:
@@ -450,21 +360,18 @@ class Hud:
                       (r.right - 14, cy), "midright")
 
     def _draw_meters(self, state: HudState) -> None:
-        """Curl bar of the typing arm, and the state of the switch hand."""
+        """Push-up depth bar with the threshold marked, and the elbow angle."""
         r = self.rect_meters
-        self.blit(self.label("Arm curl"), (r.x + 16, r.y + 12))
+        self.blit(self.label("Push-up depth"), (r.x + 16, r.y + 12))
         x0, x1 = r.x + 62, r.right - 62
 
-        # Row 1: typing arm
-        side = state.curl_side
         cy = r.y + 40
-        visible = state.body and state.visible.get(side, False)
-        value = state.curl.get(side, 0.0) if visible else 0.0
-        on = self._is_pressing(state, side)
-        color = self._press_color(state) if on else (
-            ACTION_COLORS["dot"] if state.armed else TEXT_FAINT)
-        self.blit(self.text("medium", 12, side.capitalize(),
-                            TEXT if visible else TEXT_FAINT), (r.x + 16, cy), "midleft")
+        visible = state.body and state.angle is not None
+        value = state.depth if visible else 0.0
+        on = state.pressed and visible
+        color = self._press_color(state) if on else ACTION_COLORS["dot"]
+        self.blit(self.text("medium", 12, "Depth", TEXT if visible else TEXT_FAINT),
+                  (r.x + 16, cy), "midleft")
         track = pygame.Rect(x0, cy - 3, x1 - x0, 6)
         draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 3)
         if visible:
@@ -478,27 +385,17 @@ class Hud:
         if not visible:
             status, scol = "-", TEXT_FAINT
         elif on:
-            status, scol = "curl", color
+            status, scol = "down", color
         else:
-            status, scol = f"{round(value * 100)}%", TEXT_MUTED
+            status, scol = "up", TEXT_MUTED
         self.blit(self.text("regular", 11, status, scol), (r.right - 14, cy), "midright")
 
-        # Row 2: switch hand
         cy = r.y + 64
-        self.blit(self.text("medium", 12, state.gate_side.capitalize(),
-                            TEXT if state.hand_visible else TEXT_FAINT),
+        self.blit(self.text("medium", 12, "Elbow", TEXT if visible else TEXT_FAINT),
                   (r.x + 16, cy), "midleft")
-        if not state.hand_visible:
-            dot, msg = TEXT_FAINT, "hand not in view, typing off"
-        elif state.armed:
-            dot, msg = SUCCESS, "fist, typing on"
-        else:
-            dot, msg = TEXT_MUTED, "open hand, typing off"
-        draw.circle(self.ui, dot, (x0 + 4, cy), 4)
-        if state.armed:
-            draw.glow(self.glow, dot, (x0 + 4, cy), 12, 0.7)
-        self.blit(self.text("regular", 12, msg, SUCCESS if state.armed else TEXT_MUTED),
-                  (x0 + 16, cy), "midleft")
+        msg = f"{round(state.angle)}\u00b0" if visible else "not visible"
+        self.blit(self.text("mono", 12, msg, TEXT if visible else TEXT_FAINT),
+                  (x0, cy), "midleft")
 
     def _draw_fps(self, state: HudState) -> None:
         r = self.rect_fps
@@ -592,11 +489,11 @@ class Hud:
         if dt < 0.35:
             shake = math.sin(dt * 60) * 7 * (1 - dt / 0.35)
 
-        curling = state.pressed and not state.paused
-        if state.code or curling:
+        down = state.pressed and not state.paused
+        if state.code or down:
             end = self._draw_code(state.code, x0 + shake, cy, now)
-            if curling:
-                self._draw_live_curl(state, end, cy)
+            if down:
+                self._draw_live_press(state, end, cy)
             if state.code:
                 self._draw_prediction(state, r.right - 20, cy)
         elif state.pause_kind == "space":
@@ -613,8 +510,7 @@ class Hud:
                                 WARNING), (x0, cy), "midleft")
         else:
             self.blit(self.text("regular", 14,
-                                f"{state.gate_side.capitalize()} fist on, then "
-                                f"{state.curl_side} curl: short = dot, long = dash",
+                                "Go down quickly for a dot, hold down for a dash",
                                 TEXT_FAINT), (x0 + shake, cy), "midleft")
 
         # Divider
@@ -670,7 +566,7 @@ class Hud:
                 draw.glow(self.glow, color, (cx, cy), 24, 0.55 * grow)
                 draw.capsule(self.ui, color, (cx, cy), 34 * grow, 13 * grow)
 
-            # A quick ripple on the newest symbol confirms the curl landed.
+            # A quick ripple on the newest symbol confirms the push-up landed.
             if is_last and t < 0.35:
                 k = t / 0.35
                 draw.ring(self.ui, draw.with_alpha(color, 1.0 - k), (cx, cy),
@@ -679,10 +575,10 @@ class Hud:
             x += width
         return x
 
-    def _draw_live_curl(self, state: HudState, x: float, cy: float) -> None:
+    def _draw_live_press(self, state: HudState, x: float, cy: float) -> None:
         """
-        While the arm is curled, show the symbol the curl will produce:
-        a dot outline that stretches into a dash as the curl gets longer.
+        While the body is down, show the symbol the push-up will produce:
+        a dot outline that stretches into a dash the longer it stays down.
         Once the dash has been typed it appears as a real symbol instead.
         """
         if state.pressed_time >= state.dash_after:
@@ -718,7 +614,7 @@ class Hud:
 
         left = right - 56
         if char is not None:
-            self.blit(self.text("regular", 12, "straighten arm to confirm", TEXT_MUTED),
+            self.blit(self.text("regular", 12, "stay up to confirm", TEXT_MUTED),
                       (left, cy), "midright")
         elif options:
             preview = "  ".join(options[:6]) + ("  \u2026" if len(options) > 6 else "")
@@ -727,7 +623,7 @@ class Hud:
             self.blit(self.text("medium", 13, "no match", DANGER), (left, cy), "midright")
 
     def _draw_key_hints(self, right: float, cy: float, state: HudState) -> None:
-        hints = [("S", "swap hands"), ("X", "settings"), ("Z", "hide UI"),
+        hints = [("X", "settings"), ("Z", "hide UI"),
                  ("P", "resume" if state.paused else "pause"),
                  ("H", "chart"), ("M", "sound off" if state.muted else "sound")]
         x = right

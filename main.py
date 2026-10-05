@@ -1,7 +1,7 @@
 """
-Curl Morse - type Morse code with dumbbell-style arm curls in front of a
-webcam. Short curl = dot, long curl = dash, keep the arm straight to end
-a letter (5 t) or a word (7 t).
+Push-up Morse - type Morse code by doing push-ups in front of a webcam.
+Down < 1.5 t = dot, down >= 1.5 t = dash, up 3 t = end of letter,
+up 5 t = space.
 
 Run:  python main.py
 Keys: X settings, Z hide UI, P pause listening, H toggle chart, M mute,

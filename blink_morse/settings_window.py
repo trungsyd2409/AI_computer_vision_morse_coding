@@ -1,5 +1,5 @@
 """
-Settings window with two tabs: Camera and Arm.
+Settings window with two tabs: Camera and Push-up.
 
 It runs in a separate process with its own pygame window. The main window
 uses an OpenGL context, and a second window in the same process would
@@ -26,7 +26,7 @@ from .config import (ACCENT, ACTION_COLORS, DANGER, FPS_CHOICES, MIN_ACCEPTABLE_
 
 ROW_H = 32
 PAD = 24
-TABS = [("Camera", "camera"), ("Arm", "arm")]
+TABS = [("Camera", "camera"), ("Push-up", "pushup")]
 
 
 def list_camera_names() -> list:
@@ -139,7 +139,7 @@ class SettingsWindow:
         self.conn = conn
         self.fonts = Fonts()
         self.values = {"camera": dict(initial["camera"]),
-                       "arm": dict(initial["arm"])}
+                       "pushup": dict(initial["pushup"])}
         self.stats = {}
         self.camera_names = list_camera_names()
         self.tab = "camera"
@@ -156,7 +156,7 @@ class SettingsWindow:
 
     def _build_widgets(self) -> None:
         cam = self.values["camera"]
-        arm = self.values["arm"]
+        pu = self.values["pushup"]
         w = SETTINGS_SIZE[0] - 2 * PAD
         self.tab_bar = TabBar(TABS, self.tab)
         self.tab_bar.rect = self.pg.Rect(PAD, 150, w, 34)
@@ -186,15 +186,11 @@ class SettingsWindow:
                 Slider("Contrast", "camera", "contrast", cam["contrast"], 0, 255, 1, "{:.0f}"),
                 Slider("Gain", "camera", "gain", cam["gain"], 0, 255, 1, "{:.0f}"),
             ]),
-            "arm": page([
-                Slider("Curl threshold", "arm", "curl_threshold",
-                       arm["curl_threshold"], 0.05, 0.95, 0.01, "{:.0%}"),
-                Slider("Time unit t", "arm", "time_unit",
-                       arm["time_unit"], 0.10, 1.50, 0.05, "{:.2f} s"),
-                Segmented("Typing arm (S)", "arm", "curl_side",
-                          [("Right arm", "right"), ("Left arm", "left")],
-                          arm.get("curl_side", "right")),
-                Toggle("Swap left / right arm", "arm", "swap_arms", arm["swap_arms"]),
+            "pushup": page([
+                Slider("Down threshold", "pushup", "down_threshold",
+                       pu["down_threshold"], 0.05, 0.95, 0.01, "{:.0%}"),
+                Slider("Time unit t", "pushup", "time_unit",
+                       pu["time_unit"], 0.10, 1.50, 0.05, "{:.2f} s"),
             ]),
         }
 
@@ -281,11 +277,11 @@ class SettingsWindow:
         self.conn.send(change)
 
     def _reset(self) -> None:
-        from .config import ArmSettings, CameraSettings
+        from .config import CameraSettings, PushupSettings
         from dataclasses import asdict
-        cam, arm = asdict(CameraSettings()), asdict(ArmSettings())
+        cam, pu = asdict(CameraSettings()), asdict(PushupSettings())
         cam["index"] = self.values["camera"]["index"]
-        self.values = {"camera": cam, "arm": arm}
+        self.values = {"camera": cam, "pushup": pu}
         self._build_widgets()
 
     def _read_pipe(self) -> bool:
@@ -349,7 +345,7 @@ class SettingsWindow:
             enabled = self._enabled(widget)
             widget.draw(s, self, hover=(widget is self.hover), enabled=enabled)
 
-        if self.tab == "arm":
+        if self.tab == "pushup":
             self._draw_timing_card()
 
     def _draw_timing_card(self) -> None:
@@ -357,8 +353,8 @@ class SettingsWindow:
         pg = self.pg
         from . import draw
         s = self.screen
-        t = self.values["arm"]["time_unit"]
-        last = self.pages["arm"][-1].rect
+        t = self.values["pushup"]["time_unit"]
+        last = self.pages["pushup"][-1].rect
         card = pg.Rect(PAD, last.bottom + 18, SETTINGS_SIZE[0] - 2 * PAD, 138)
         layer = pg.Surface(card.size, pg.SRCALPHA)
         draw.rounded_rect(layer, (255, 255, 255, 12), layer.get_rect(), 12)
@@ -367,10 +363,10 @@ class SettingsWindow:
         s.blit(self._label("Timing"), (card.x + 16, card.y + 14))
 
         rows = [
-            (ACTION_COLORS["dot"], "Dot", f"curl shorter than {1.5 * t:.2f} s"),
-            (ACTION_COLORS["dash"], "Dash", f"curl {1.5 * t:.2f} s or longer"),
-            (ACTION_COLORS["letter"], "End letter", f"arm straight {5 * t:.2f} s"),
-            (ACTION_COLORS["word"], "Space", f"arm straight {7 * t:.2f} s"),
+            (ACTION_COLORS["dot"], "Dot", f"down shorter than {1.5 * t:.2f} s"),
+            (ACTION_COLORS["dash"], "Dash", f"down {1.5 * t:.2f} s or longer"),
+            (ACTION_COLORS["letter"], "End letter", f"up {3 * t:.2f} s"),
+            (ACTION_COLORS["word"], "Space", f"up {5 * t:.2f} s"),
         ]
         for i, (color, name, rule) in enumerate(rows):
             cy = card.y + 46 + i * 24

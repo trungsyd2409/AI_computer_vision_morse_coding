@@ -43,7 +43,7 @@ POSE_MODEL_URL = (
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Curl Morse"
+APP_TITLE = "Push-up Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -64,8 +64,8 @@ DANGER = (251, 113, 133)
 # One colour per action so the legend, the meters, the typed symbols and
 # the pause countdown all speak the same visual language.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # short curl
-    "dash": (167, 139, 250),      # long curl
+    "dot": (103, 232, 249),       # short push-up (quick down)
+    "dash": (167, 139, 250),      # long push-up (hold down)
     "letter": (251, 191, 36),     # short pause -> end of letter
     "word": (74, 222, 128),       # long pause  -> space
 }
@@ -99,26 +99,17 @@ class CameraSettings:
 
 
 @dataclass
-class ArmSettings:
-    """Threshold and timing for reading dumbbell curls."""
+class PushupSettings:
+    """Threshold and timing for reading push-ups."""
 
-    # Curl is a 0..1 score from the elbow angle: 0 = arm straight (about
-    # 170 deg), 1 = fully curled (about 45 deg). Above `curl_threshold` the
-    # arm counts as curled ("pressed"). Adjustable from 5% to 95%.
-    curl_threshold: float = 0.50
-    # The Morse time unit t, in seconds. Everything is derived from it:
-    # curled < 1.5 t = dot, >= 1.5 t = dash, arm extended 5 t = end of
-    # letter, extended 7 t = end of word. A real curl takes about half a
-    # second, so t defaults much longer than it did for blinks.
-    time_unit: float = 0.50
-    swap_arms: bool = False           # fixes cameras that mirror the image
-    # Which arm curls to type. The other hand is the switch: fist = typing
-    # on, open hand = typing off. S swaps the two roles.
-    curl_side: str = "right"
-
-    @property
-    def gate_side(self) -> str:
-        return "left" if self.curl_side == "right" else "right"
+    # Depth is a 0..1 score from the elbow angle: 0 = arms straight, body
+    # up (about 160 deg or more), 1 = chest down (about 80 deg). Above
+    # `down_threshold` the body counts as "down" (key pressed).
+    down_threshold: float = 0.50
+    # The Morse time unit t, in seconds:
+    # down < 1.5 t = dot, down >= 1.5 t = dash,
+    # up 3 t = end of letter, up 5 t = space.
+    time_unit: float = 0.60
 
     @property
     def dash_after(self) -> float:
@@ -126,17 +117,17 @@ class ArmSettings:
 
     @property
     def letter_gap(self) -> float:
-        return 5.0 * self.time_unit
+        return 3.0 * self.time_unit
 
     @property
     def word_gap(self) -> float:
-        return 7.0 * self.time_unit
+        return 5.0 * self.time_unit
 
 
 @dataclass
 class AppSettings:
     camera: CameraSettings = field(default_factory=CameraSettings)
-    arm: ArmSettings = field(default_factory=ArmSettings)
+    pushup: PushupSettings = field(default_factory=PushupSettings)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -152,7 +143,7 @@ class AppSettings:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             return settings
-        for name in ("camera", "arm"):
+        for name in ("camera", "pushup"):
             section = getattr(settings, name)
             saved = data.get(name, {})
             for f in fields(section):

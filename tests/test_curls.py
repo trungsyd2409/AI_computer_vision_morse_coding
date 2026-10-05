@@ -4,7 +4,7 @@ import unittest
 
 from blink_morse.arm_tracker import (ArmPose, build_result, curl_from_angle,
                                      elbow_angle)
-from blink_morse.config import ArmSettings
+from blink_morse.config import PushupSettings
 from blink_morse.curls import CurlDetector, CurlKind
 from blink_morse.morse import MorseComposer
 
@@ -83,20 +83,28 @@ class CurlDetectorTest(unittest.TestCase):
         events, _ = play(self.d, [(0.3, None, UP), (0.3, None, DOWN)], self.t)
         self.assertEqual(kinds(events), [CurlKind.DOT])
 
-    def test_letter_after_5t_and_space_after_7t(self):
-        s = ArmSettings(time_unit=0.5)
-        self.assertEqual((s.dash_after, s.letter_gap, s.word_gap), (0.75, 2.5, 3.5))
+    def test_pushup_letter_after_3t_and_space_after_5t(self):
+        s = PushupSettings(time_unit=0.5)
+        self.assertEqual((s.dash_after, s.letter_gap, s.word_gap), (0.75, 1.5, 2.5))
+        d = CurlDetector(s.down_threshold, s.time_unit)
         composer = MorseComposer(s.letter_gap, s.word_gap)
-        # dot dash  ->  A, then a long rest adds a space
-        script = [(0.3, DOWN, UP), (0.3, DOWN, DOWN), (1.0, DOWN, UP),
-                  (2.0, DOWN, DOWN)]
-        play(self.d, script, self.t, composer)
-        self.assertEqual(composer.code, ".-")          # 2.0 s < 2.5 s, not yet
-        play(self.d, [(0.6, DOWN, DOWN)], self.t + 3.6, composer)
+        _, t = play(d, [(0.5, None, DOWN)])
+        # quick down (dot), up, long down (dash), then stay up 1.2 s
+        _, t = play(d, [(0.3, None, UP), (0.3, None, DOWN), (1.0, None, UP),
+                        (1.2, None, DOWN)], t, composer)
+        self.assertEqual(composer.code, ".-")          # 1.2 s < 1.5 s
+        _, t = play(d, [(0.5, None, DOWN)], t, composer)
         self.assertEqual(composer.text, "A")
-        play(self.d, [(1.2, DOWN, DOWN)], self.t + 4.2, composer)
+        _, t = play(d, [(1.0, None, DOWN)], t, composer)
         self.assertEqual(composer.text, "A ")
 
+
+class PushupDepthTest(unittest.TestCase):
+    def test_depth_from_elbow_angle(self):
+        from blink_morse.arm_tracker import pushup_depth
+        self.assertEqual(pushup_depth(175), 0.0)      # arms straight, up
+        self.assertEqual(pushup_depth(70), 1.0)       # chest down
+        self.assertAlmostEqual(pushup_depth(120), 0.5)
 
 
 class GateTest(unittest.TestCase):

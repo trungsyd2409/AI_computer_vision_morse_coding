@@ -1,6 +1,6 @@
-# Curl Morse
+# Push-up Morse
 
-Type Morse code with your arm, like doing dumbbell curls at the gym: a short curl is a dot, a long curl is a dash, and holding the arm straight marks the end of a letter or a word. Only the **right arm** types; the **left hand is the switch**: make a fist to turn typing on, open the hand to turn it off. Press **S** to swap the two roles. The app measures the elbow angle with MediaPipe Pose, reads the fist with MediaPipe Hands, and draws the typing arm's skeleton and the switch hand's 21-point skeleton on the camera image.
+Type Morse code by doing push-ups: going down briefly is a dot, holding the down position is a dash, and staying up marks the end of a letter or a word. The app measures the elbow angle with MediaPipe Pose and draws a thin, small skeleton of the whole body (head, torso, arms, legs) on the camera image.
 
 ![Interface preview](docs/preview.png)
 <sub>Interface preview, rendered with a placeholder camera image.</sub>
@@ -48,7 +48,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-On the first launch the pose model (`pose_landmarker_lite.task`, about 5.5 MB) is downloaded into `models/` (the hand model `hand_landmarker.task` is already there, or is downloaded too). Later launches work offline.
+On the first launch the pose model (`pose_landmarker_lite.task`, about 5.5 MB) is downloaded into `models/`. Later launches work offline.
 
 ### 4. Run the tests (optional)
 
@@ -62,34 +62,20 @@ The tests cover the Morse logic, the blink detector and the left/right eye mappi
 
 ## How to use it
 
-Stand or sit so that your right **shoulder, elbow and wrist** and your **left hand** are in view.
+Put the camera on the floor or a low shelf, **side-on** to you, so your whole body is in view. Every push-up is read from the elbow angle (the mean of the arms MediaPipe can see): about 160° or more = **up**, about 80° = **down**. The body counts as down once the depth passes the **down threshold** (50 % ≈ 120°), and as up again once it rises 10 % above it.
 
-**Switch hand (left).** Fist = typing on (the hand skeleton turns green, label "FIST on"). Open hand or hand out of view = typing off: you can move the right arm freely and nothing is typed. When you close the fist with the right arm already raised, lower it once first; then curls count.
+All timings come from one time unit **t** (0.6 s by default, adjustable in the settings window):
 
-**Typing arm (right).** Curl it the way you would lift a dumbbell.
-
-**Swap hands.** Press **S** (or use *Typing arm* in the Arm settings tab) to type with the left arm and switch with the right hand. The choice is saved. All timings come from one time unit **t** (0.5 s by default, adjustable in the settings window):
-
-| Arm | Result | With t = 0.5 s |
+| Push-up | Result | With t = 0.6 s |
 |---|---|---|
-| **Short curl**, shorter than 1.5 t | Dot `·` | under 0.75 s |
-| **Long curl**, held 1.5 t or longer | Dash `–` | 0.75 s or more |
-| **Arm straight for 5 t** | End of letter, the Latin letter pops up | 2.5 s |
-| **Arm straight for 7 t** | End of word, a space is added | 3.5 s |
+| **Down**, shorter than 1.5 t | Dot `·` | under 0.9 s |
+| **Down**, 1.5 t or longer | Dash `–` | 0.9 s or more |
+| **Up for 3 t** | End of letter, the Latin letter pops up | 1.8 s |
+| **Up for 5 t** | End of word, a space is added | 3.0 s |
 
-**Curl score.** The elbow angle is turned into a curl score: about 170° (straight arm) = 0 %, about 45° (fully curled) = 100 %. The arm counts as curled above the **curl threshold** (50 % ≈ 107°) and as straight again once it drops 10 % below it, so a shaky arm near the threshold does not type twice. The angle comes from MediaPipe's 3D world landmarks, so it still works when your forearm points partly towards the camera.
+A dash is typed the moment you have been down for 1.5 t, while you are still down. A dot is typed when you push back up.
 
-A dash is typed the moment the curl reaches 1.5 t, while the arm is still up. A dot is typed when the arm comes back down.
-
-**Arm skeleton.** Each visible arm is drawn as glowing bones with a filled wedge showing the elbow angle, and a readout of the angle in degrees next to the elbow. The arm that is curling lights up cyan (would be a dot) and turns violet once it has become a dash. The Arm curl panel shows both arms as bars, with the white tick at the threshold.
-
-**Example: typing "HI"** (t = 0.5 s)
-
-1. Do four quick curls (`····`), then keep the arm straight. **H** pops up after 2.5 s.
-2. Do two quick curls (`··`) and keep the arm straight. **I** pops up.
-3. Keep it straight a little longer (3.5 s in total) and a space is added.
-
-**Choosing t.** If quick curls come out as dashes, raise **t**; if letters end too slowly, lower it. The slider goes from 0.1 to 1.5 s and the settings window spells out every rule in seconds.
+**Skeleton.** The whole body is drawn with thin lines and small joints so it does not cover the image. It turns cyan while you are down (a dot so far) and violet once it has become a dash. The Push-up depth panel shows the depth bar (white tick = threshold) and the elbow angle.
 
 Press **P** to pause listening while you rest, or **Z** to hide the interface and stop input completely. Deleting is done on the keyboard.
 
@@ -97,10 +83,9 @@ Press **P** to pause listening while you rest, or **Z** to hide the interface an
 
 | Key | Action |
 |---|---|
-| `S` | Swap hands: which arm types and which hand is the fist switch |
 | `X` | Open or close the settings window |
 | `Z` | Hide or show the interface. Hidden = normal camera colours and no typing |
-| `P` | Pause or resume listening to your arm |
+| `P` | Pause or resume listening |
 | `H` | Show or hide the Morse chart |
 | `M` | Mute or unmute sounds |
 | `Backspace` | Delete the last symbol, or the last letter if no symbol is pending |
@@ -118,10 +103,9 @@ Press `X` to open it. It has two tabs. Changes apply instantly and are saved to 
 - Device number, with the device name underneath on Windows (for example "Integrated Webcam" or "Camo"), resolution, target FPS (30 or 60), mirror view, auto exposure, and manual exposure, brightness, contrast and gain.
 - **Driver settings** (Windows) opens the camera maker's own settings dialog.
 
-**Arm tab**
-- **Curl threshold**: how curled the arm must be to count (5 % to 95 %, default 50 %), marked by the white tick on the curl bars.
+**Push-up tab**
+- **Down threshold**: how deep you must go to count as down (5 % to 95 %, default 50 %).
 - **Time unit t**: the base timing, from 0.1 to 1.5 s. A card below the slider spells out the dot, dash, letter and space timings for the current value.
-- **Swap left / right arm**: for cameras or phone apps that already mirror the image. It only affects the Left / Right labels.
 
 ### Using an iPhone or Android phone as the camera
 
@@ -273,9 +257,9 @@ AI_computer_vision_morse_coding/
 │   ├── app.py               main loop, wires everything together
 │   ├── config.py            constants, colours, saved settings
 │   ├── camera.py            threaded webcam reader
-│   ├── arm_tracker.py       MediaPipe Pose wrapper, elbow angle, arm mapping
-│   ├── curls.py             curl timing detector (dot / dash)
-│   ├── hand_tracker.py      MediaPipe Hands wrapper, fist / open-hand switch
+│   ├── arm_tracker.py       MediaPipe Pose wrapper, elbow angle, push-up depth
+│   ├── curls.py             press timing detector (dot / dash)
+│   ├── hand_tracker.py      old fist switch (no longer used by the app)
 │   ├── face_tracker.py      old face input (no longer used by the app)
 │   ├── blinks.py            old blink detector (no longer used by the app)
 │   ├── morse.py             Morse table and composer state machine

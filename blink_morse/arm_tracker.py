@@ -72,6 +72,27 @@ def elbow_angle(shoulder, elbow, wrist) -> float:
     return math.degrees(math.acos(min(1.0, max(-1.0, cos))))
 
 
+# Push-up: arms straight (body up) ~160-180 deg, chest down ~70-90 deg.
+PUSHUP_UP_ANGLE = 160.0
+PUSHUP_DOWN_ANGLE = 80.0
+
+# Full-body skeleton for drawing (MediaPipe pose indices). The face is
+# reduced to a small head circle, drawn separately.
+BODY_CONNECTIONS = (
+    (11, 12), (11, 23), (12, 24), (23, 24),          # torso
+    (11, 13), (13, 15), (12, 14), (14, 16),          # arms
+    (15, 19), (16, 20),                              # hands (wrist -> index)
+    (23, 25), (25, 27), (24, 26), (26, 28),          # legs
+    (27, 31), (28, 32), (27, 29), (28, 30),          # feet
+)
+
+
+def pushup_depth(angle: float) -> float:
+    """Elbow angle -> push-up depth, 0 = body up (arms straight), 1 = chest down."""
+    k = (PUSHUP_UP_ANGLE - angle) / (PUSHUP_UP_ANGLE - PUSHUP_DOWN_ANGLE)
+    return min(1.0, max(0.0, k))
+
+
 def curl_from_angle(angle: float) -> float:
     """Elbow angle -> curl score, 0 = straight arm, 1 = fully curled."""
     k = (STRAIGHT_ANGLE - angle) / (STRAIGHT_ANGLE - CURLED_ANGLE)
@@ -96,6 +117,14 @@ class BodyResult:
     # even when the rest of the arm is hidden: the app uses it to decide
     # which detected hand belongs to which side of the body.
     wrists: dict = field(default_factory=lambda: {"left": None, "right": None})
+    # All 33 landmarks as (x, y, visibility), normalised image coordinates,
+    # for drawing the whole-body skeleton.
+    landmarks: list = field(default_factory=list)
+
+    def elbow_angle(self) -> Optional[float]:
+        """Mean elbow angle of the visible arms (a side view often hides one)."""
+        angles = [a.angle for a in (self.left, self.right) if a is not None]
+        return sum(angles) / len(angles) if angles else None
 
 
 class ArmTracker:
@@ -161,6 +190,7 @@ class ArmTracker:
             result.wrists = {"left": mp_wrists[0], "right": mp_wrists[1]}
         else:
             result.wrists = {"left": mp_wrists[1], "right": mp_wrists[0]}
+        result.landmarks = [(p.x, p.y, _visibility(p)) for p in lm]
         return result
 
     def close(self) -> None:

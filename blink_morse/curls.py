@@ -1,4 +1,7 @@
 """
+Generic "press" timer. The app now feeds it the push-up depth (body down =
+pressed); it was first written for arm curls, hence the names.
+
 Turns the curl of the arms into Morse dots and dashes, using how long each
 curl is held, the same way a telegraph key uses the length of each press.
 
