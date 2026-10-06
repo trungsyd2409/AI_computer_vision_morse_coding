@@ -5,7 +5,9 @@ Per frame:
   1. Take the newest camera frame (the camera runs in its own thread).
   2. Mirror it and run MediaPipe Pose. The mean elbow angle of the visible
      arms gives the push-up depth (arms straight = up, bent = down).
-  3. Feed the depth to the press detector, which times each "down":
+  3. Only while the whole body is in view and horizontal (push-up
+     position, see posture.py), feed the depth to the press detector,
+     which times each "down":
      down < 1.5 t = dot, down >= 1.5 t = dash.
   4. Let the Morse composer turn time spent "up" into letters (3 t) and
      spaces (5 t).
@@ -25,6 +27,7 @@ import pygame
 
 from .audio import SoundBank
 from .arm_tracker import ArmTracker, pushup_depth
+from .posture import PostureGate
 from .camera import CameraStream
 from .compositor import Compositor, cover_crop
 from .config import APP_TITLE, WINDOW_SIZE, AppSettings, CameraSettings, PushupSettings
@@ -41,6 +44,7 @@ class BlinkMorseApp:
         # The model is loaded before the window opens so a first-run
         # download does not leave a frozen black window on screen.
         self.tracker = ArmTracker()
+        self.posture = PostureGate()
 
         pygame.init()
         pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
@@ -158,6 +162,7 @@ class BlinkMorseApp:
         state = self._state
         state.body = False
         self._body_pts = None
+        self.posture.reset()
         # Start timing afresh, so time spent with the UI hidden is not
         # counted as a pause that ends the letter.
         self.detector.reset(time.perf_counter())
@@ -179,19 +184,30 @@ class BlinkMorseApp:
         body = self.tracker.detect(frame_rgb, timestamp_ms, cam.mirror)
 
         state = self._state
+        h, w = frame_rgb.shape[:2]
+        ready = self.posture.update(None if body is None else body.landmarks, w, h, now)
         angle = None if body is None else body.elbow_angle()
         if angle is None:
             # No arm in view: nothing can be pressed, pauses keep counting.
             self.detector.reset()
-            state.body = body is not None
             state.angle = None
+        elif not ready:
+            # Not in push-up position (standing, sitting, body cut off):
+            # show the angle but type nothing. After getting into position
+            # the arms must be straight once before the first push-up counts.
+            self.detector.cancel(now)
+            self.detector.curl["right"] = pushup_depth(angle)
+            state.angle = angle
         else:
             depth = pushup_depth(angle)
             for event in self.detector.update(None, depth, now):
                 if not self.paused:
                     self._handle_press(event, now)
-            state.body = True
             state.angle = angle
+        state.body = body is not None
+        state.ready = ready
+        state.posture = "push-up position" if ready else self.posture.reason
+        state.tilt = self.posture.tilt
         state.depth = self.detector.curl["right"]
         state.pressed = self.detector.pressed
         self._update_body_points(body, frame_rgb.shape)

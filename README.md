@@ -73,6 +73,8 @@ All timings come from one time unit **t** (0.6 s by default, adjustable in the s
 | **Up for 3 t** | End of letter, the Latin letter pops up | 1.8 s |
 | **Up for 5 t** | End of word, a space is added | 3.0 s |
 
+**Only push-ups count.** Input is on only while your **whole body** is in view (shoulder, hip, knee and ankle on at least one side, plus one full arm) and your body is **horizontal** (shoulders-to-ankles line within 35° of horizontal). Standing up and bending your elbows, or having only your upper body in frame, types nothing. The skeleton is grey while input is off and green once you are in push-up position; the Pose row in the panel says what is missing. After getting into position, straighten your arms once before the first push-up counts.
+
 A dash is typed the moment you have been down for 1.5 t, while you are still down. A dot is typed when you push back up.
 
 **Skeleton.** The whole body is drawn with thin lines and small joints so it does not cover the image. It turns cyan while you are down (a dot so far) and violet once it has become a dash. The Push-up depth panel shows the depth bar (white tick = threshold) and the elbow angle.
@@ -259,6 +261,7 @@ AI_computer_vision_morse_coding/
 │   ├── camera.py            threaded webcam reader
 │   ├── arm_tracker.py       MediaPipe Pose wrapper, elbow angle, push-up depth
 │   ├── curls.py             press timing detector (dot / dash)
+│   ├── posture.py           whole body visible + horizontal check
 │   ├── hand_tracker.py      old fist switch (no longer used by the app)
 │   ├── face_tracker.py      old face input (no longer used by the app)
 │   ├── blinks.py            old blink detector (no longer used by the app)

@@ -4,14 +4,14 @@ GPU compositor built on ModernGL.
 Each frame the CPU uploads three textures (camera image, UI layer, glow
 layer) and a single full-screen shader combines them:
 
-1. Colour-grade the camera lightly and dim it a little so the UI stays
-   readable. `u_filter` fades all of this (and the panels) out, which is
-   how the Z key shows the untouched camera image.
+1. Show the camera with its normal colours (no tint, no dimming, no
+   vignette), the same as with the UI hidden. `u_filter` fades the
+   panels out, which is how the Z key hides the interface.
 2. Draw frosted-glass panels: inside each rounded rectangle the camera is
    sampled from a low mipmap level, which is a cheap, smooth blur.
 3. Add the glow layer, also sampled from several mipmap levels, to get a
    bloom effect without extra render passes.
-4. Blend the UI layer on top and add a touch of film grain.
+4. Blend the UI layer on top.
 """
 
 import moderngl
@@ -81,22 +81,15 @@ void main() {
     vec2 px  = uv * u_res;
     vec2 cuv = u_cam_offset + uv * u_cam_scale;
 
-    // Background: lightly graded camera, dimmed a touch, soft vignette.
+    // Background: the camera with its normal colours, untouched.
     vec3 raw = texture(u_cam, cuv).rgb;
-    vec3 col = grade(raw) * 0.86;
-    vec2 d = uv - 0.5;
-    col *= 1.0 - dot(d, d) * 0.55;
-    col = mix(vec3(0.030, 0.035, 0.050), col, u_cam_ready);
+    vec3 col = mix(vec3(0.030, 0.035, 0.050), raw, u_cam_ready);
     raw = mix(vec3(0.030, 0.035, 0.050), raw, u_cam_ready);
 
     for (int i = 0; i < u_panel_count; ++i) {
         vec4 r = u_panels[i];
         vec2 centre = r.xy + r.zw * 0.5;
         float sd = sd_round_rect(px - centre, r.zw * 0.5, u_radius);
-
-        // Soft drop shadow outside the panel.
-        float shadow = (1.0 - smoothstep(0.0, 26.0, sd)) * step(0.0, sd);
-        col *= 1.0 - shadow * 0.35;
 
         // Glass fill: blurred camera with a light smoky tint, clear enough
         // to see the room through it but dark enough for white text.
@@ -131,8 +124,6 @@ void main() {
     vec4 ui = texture(u_ui, uv);
     col = mix(col, ui.rgb, ui.a);
 
-    float grain = fract(sin(dot(px + fract(u_time) * 97.0, vec2(12.9898, 78.233))) * 43758.5453);
-    col += (grain - 0.5) * 0.014 * u_filter;
 
     f_color = vec4(col, 1.0);
 }
@@ -159,7 +150,7 @@ class Compositor:
         self.program["u_ui"] = 1
         self.program["u_glow"] = 2
         self.program["u_res"] = size
-        self.program["u_radius"] = 14.0
+        self.program["u_radius"] = 10.0
         self.program["u_cam_ready"] = 0.0
         self.program["u_filter"] = 1.0
         self.program["u_cam_scale"] = (1.0, 1.0)
@@ -217,7 +208,8 @@ class Compositor:
 
     def render(self, time_s: float, filter_amount: float = 1.0) -> None:
         """Draw the frame. `filter_amount` 0..1 fades the styled look in."""
-        self.program["u_time"] = time_s
+        if "u_time" in self.program:    # unused by the shader at the moment
+            self.program["u_time"] = time_s
         self.program["u_filter"] = float(filter_amount)
         self.ctx.screen.use()
         self.ctx.viewport = (0, 0, *self.size)

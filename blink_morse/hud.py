@@ -51,6 +51,9 @@ class HudState:
     body: bool = False                   # a person is being tracked
     angle: Optional[float] = None        # mean elbow angle of the visible arms
     depth: float = 0.0                   # 0 = up (arms straight), 1 = chest down
+    ready: bool = False                  # whole body in view and horizontal
+    posture: str = "no body"             # what the posture check says
+    tilt: Optional[float] = None         # body angle from horizontal, degrees
     # 33 pose landmarks as (x, y, visibility) in window pixels, or None
     skeleton: Optional[list] = None
     threshold: float = 0.5               # above this the body counts as down
@@ -119,18 +122,20 @@ class Hud:
         self._text_cache = {}
         self._chart_cache = {}
 
-        margin = 16
-        self.rect_title = pygame.Rect(margin, margin, 248, 60)
-        self.rect_legend = pygame.Rect(margin, 88, 248, 132)
-        self.rect_meters = pygame.Rect(margin, 232, 248, 80)
-        self.rect_fps = pygame.Rect(w - margin - 100, margin, 100, 32)
-        self.rect_chart = pygame.Rect(w - margin - 212, 60, 212, 362)
-        self.rect_bottom = pygame.Rect(margin, h - margin - 150, w - 2 * margin, 150)
+        # Compact layout: small panels hugging the edges, so most of the
+        # window shows the camera.
+        margin = 10
+        self.rect_title = pygame.Rect(margin, margin, 196, 44)
+        self.rect_legend = pygame.Rect(margin, 60, 196, 96)
+        self.rect_meters = pygame.Rect(margin, 162, 196, 58)
+        self.rect_fps = pygame.Rect(w - margin - 76, margin, 76, 24)
+        self.rect_chart = pygame.Rect(w - margin - 182, 40, 182, 280)
+        self.rect_bottom = pygame.Rect(margin, h - margin - 100, w - 2 * margin, 100)
         self.rect_error = pygame.Rect(0, 0, 320, 96)
         self.rect_error.center = (w // 2, h // 2 - 40)
 
         # Letters pop up high between the side panels, clear of the face.
-        self.pop_center = ((self.rect_legend.right + self.rect_chart.left) / 2, 140)
+        self.pop_center = ((self.rect_legend.right + self.rect_chart.left) / 2, 110)
 
         # Animation state
         self._pops = []           # (text, color, start, size)
@@ -268,8 +273,10 @@ class Hud:
             return
         if state.pressed and not state.paused:
             color, alpha, glow_k = self._press_color(state), 0.95, 0.5
+        elif state.ready:
+            color, alpha, glow_k = SUCCESS, 0.85, 0.2      # in position, counting
         else:
-            color, alpha, glow_k = BONE, 0.75, 0.15
+            color, alpha, glow_k = BONE, 0.45, 0.0         # not counting
 
         def ok(i):
             return pts[i][2] >= 0.5
@@ -308,24 +315,24 @@ class Hud:
 
     def _draw_title(self, state: HudState) -> None:
         r = self.rect_title
-        self.blit(self.text("semibold", 17, "Push-up Morse", TEXT), (r.x + 16, r.y + 10))
+        self.blit(self.text("semibold", 14, "Push-up Morse", TEXT), (r.x + 12, r.y + 6))
 
         if state.camera_error:
             dot, msg = DANGER, "Camera unavailable"
         elif state.paused:
             dot, msg = WARNING, "Paused, press P to listen"
-        elif state.body and state.angle is not None:
+        elif state.ready:
             dot, msg = SUCCESS, "Listening"
         elif state.body:
-            dot, msg = WARNING, "Arms not visible, turn side-on"
+            dot, msg = WARNING, "Get into push-up position"
         else:
-            dot, msg = TEXT_FAINT, "Get into push-up position"
+            dot, msg = TEXT_FAINT, "Show your whole body"
 
-        cy = r.y + 43
-        draw.circle(self.ui, dot, (r.x + 20, cy), 3.5)
+        cy = r.y + 32
+        draw.circle(self.ui, dot, (r.x + 15, cy), 3)
         if dot is not TEXT_FAINT:
-            draw.glow(self.glow, dot, (r.x + 20, cy), 10, 0.6)
-        self.blit(self.text("regular", 12, msg, TEXT_MUTED), (r.x + 30, cy), "midleft")
+            draw.glow(self.glow, dot, (r.x + 15, cy), 8, 0.6)
+        self.blit(self.text("regular", 11, msg, TEXT_MUTED), (r.x + 24, cy), "midleft")
 
     def _legend_rows(self, state: HudState) -> list:
         def sec(v):
@@ -340,7 +347,7 @@ class Hud:
     def _draw_legend(self, state: HudState, now: float) -> None:
         r = self.rect_legend
         for i, (key, name, hint) in enumerate(self._legend_rows(state)):
-            cy = r.y + 22 + i * 29
+            cy = r.y + 15 + i * 22
             color = ACTION_COLORS[key]
 
             # A row lights up briefly when its action fires, and the pause
@@ -350,28 +357,29 @@ class Hud:
             if key == counting and state.pause_progress > 0:
                 lit = max(lit, 0.6 * state.pause_progress)
             if lit > 0:
-                pill = pygame.Rect(r.x + 8, cy - 12, r.w - 16, 24)
+                pill = pygame.Rect(r.x + 6, cy - 10, r.w - 12, 20)
                 draw.rounded_rect(self.ui, draw.with_alpha(color, 0.18 * lit), pill, 8)
 
-            draw.circle(self.ui, color, (r.x + 20, cy), 4.5)
-            draw.glow(self.glow, color, (r.x + 20, cy), 9 + 8 * lit, 0.35 + 0.5 * lit)
-            self.blit(self.text("medium", 13, name, TEXT), (r.x + 34, cy), "midleft")
-            self.blit(self.text("regular", 12, hint, TEXT_MUTED),
-                      (r.right - 14, cy), "midright")
+            draw.circle(self.ui, color, (r.x + 15, cy), 3.5)
+            draw.glow(self.glow, color, (r.x + 15, cy), 7 + 6 * lit, 0.35 + 0.5 * lit)
+            self.blit(self.text("medium", 12, name, TEXT), (r.x + 26, cy), "midleft")
+            self.blit(self.text("regular", 11, hint, TEXT_MUTED),
+                      (r.right - 10, cy), "midright")
 
     def _draw_meters(self, state: HudState) -> None:
         """Push-up depth bar with the threshold marked, and the elbow angle."""
         r = self.rect_meters
-        self.blit(self.label("Push-up depth"), (r.x + 16, r.y + 12))
-        x0, x1 = r.x + 62, r.right - 62
+        self.blit(self.label("Push-up depth"), (r.x + 12, r.y + 7))
+        x0, x1 = r.x + 52, r.right - 44
 
-        cy = r.y + 40
+        cy = r.y + 29
         visible = state.body and state.angle is not None
         value = state.depth if visible else 0.0
         on = state.pressed and visible
-        color = self._press_color(state) if on else ACTION_COLORS["dot"]
-        self.blit(self.text("medium", 12, "Depth", TEXT if visible else TEXT_FAINT),
-                  (r.x + 16, cy), "midleft")
+        color = self._press_color(state) if on else (
+            ACTION_COLORS["dot"] if state.ready else TEXT_FAINT)
+        self.blit(self.text("medium", 11, "Depth", TEXT if visible else TEXT_FAINT),
+                  (r.x + 12, cy), "midleft")
         track = pygame.Rect(x0, cy - 3, x1 - x0, 6)
         draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 3)
         if visible:
@@ -388,14 +396,22 @@ class Hud:
             status, scol = "down", color
         else:
             status, scol = "up", TEXT_MUTED
-        self.blit(self.text("regular", 11, status, scol), (r.right - 14, cy), "midright")
+        self.blit(self.text("regular", 11, status, scol), (r.right - 10, cy), "midright")
 
-        cy = r.y + 64
-        self.blit(self.text("medium", 12, "Elbow", TEXT if visible else TEXT_FAINT),
-                  (r.x + 16, cy), "midleft")
-        msg = f"{round(state.angle)}\u00b0" if visible else "not visible"
-        self.blit(self.text("mono", 12, msg, TEXT if visible else TEXT_FAINT),
-                  (x0, cy), "midleft")
+        # Row 2: posture check, and the elbow angle on the right
+        cy = r.y + 46
+        self.blit(self.text("medium", 11, "Pose", TEXT if state.body else TEXT_FAINT),
+                  (r.x + 12, cy), "midleft")
+        dot = SUCCESS if state.ready else (WARNING if state.body else TEXT_FAINT)
+        draw.circle(self.ui, dot, (x0 + 3, cy), 3)
+        if state.ready:
+            draw.glow(self.glow, dot, (x0 + 4, cy), 12, 0.7)
+        text = "ready" if state.ready else state.posture
+        self.blit(self.text("regular", 10, text, SUCCESS if state.ready else TEXT_MUTED),
+                  (x0 + 11, cy), "midleft")
+        if visible and state.ready:
+            self.blit(self.text("mono", 11, f"{round(state.angle)}\u00b0", TEXT_MUTED),
+                      (r.right - 10, cy), "midright")
 
     def _draw_fps(self, state: HudState) -> None:
         r = self.rect_fps
@@ -405,12 +421,12 @@ class Hud:
             color = WARNING
         else:
             color = DANGER
-        label = self.text("mono", 13, f"{state.fps:4.0f} FPS", TEXT)
-        total = 14 + label.get_width()
+        label = self.text("mono", 11, f"{state.fps:3.0f} FPS", TEXT)
+        total = 11 + label.get_width()
         x = r.centerx - total / 2
-        draw.circle(self.ui, color, (x + 3, r.centery), 3.5)
-        draw.glow(self.glow, color, (x + 3, r.centery), 10, 0.6)
-        self.blit(label, (x + 14, r.centery), "midleft")
+        draw.circle(self.ui, color, (x + 3, r.centery), 3)
+        draw.glow(self.glow, color, (x + 3, r.centery), 8, 0.6)
+        self.blit(label, (x + 11, r.centery), "midleft")
 
     def _draw_chart(self, state: HudState) -> None:
         # The chart only changes when the typed code changes, so it is cached.
@@ -429,21 +445,21 @@ class Hud:
         surf.fill(UI_CLEAR)
 
         header = self.label("Morse chart")
-        surf.blit(header, (14, 14))
+        surf.blit(header, (10, 9))
         if prefix:
             n = len(candidates(prefix))
             hint = self.text("regular", 11, f"{n} match" + ("" if n == 1 else "es"),
                              ACCENT if n else DANGER)
-            surf.blit(hint, hint.get_rect(topright=(r.w - 14, 12)))
+            surf.blit(hint, hint.get_rect(topright=(r.w - 10, 7)))
 
         # Digits have five symbols each, so the last column is wider.
-        col_x = (14, 76, 138)
-        col_w = (60, 60, 68)
+        col_x = (10, 62, 114)
+        col_w = (50, 50, 64)
         dot_color = TEXT
         for i, char in enumerate(CHART_CHARS):
             col, row = divmod(i, CHART_ROWS)
             x = col_x[col]
-            cy = 46 + row * 24
+            cy = 34 + row * 19
             code = MORSE_TABLE[char]
 
             reachable = not prefix or code.startswith(prefix)
@@ -451,39 +467,39 @@ class Hud:
             alpha = 1.0 if reachable else 0.22
 
             if exact:
-                pill = pygame.Rect(x - 6, cy - 11, col_w[col], 22)
-                draw.rounded_rect(surf, draw.with_alpha(ACCENT, 0.18), pill, 7)
+                pill = pygame.Rect(x - 5, cy - 9, col_w[col], 18)
+                draw.rounded_rect(surf, draw.with_alpha(ACCENT, 0.18), pill, 6)
 
             char_color = ACCENT if exact else TEXT
-            glyph = self.text("semibold", 13, char, draw.with_alpha(char_color, alpha))
+            glyph = self.text("semibold", 11, char, draw.with_alpha(char_color, alpha))
             surf.blit(glyph, glyph.get_rect(midleft=(round(x), cy)))
 
-            gx = x + 16
+            gx = x + 13
             for j, sym in enumerate(code):
                 typed = prefix and j < len(prefix) and reachable
                 color = ACCENT if typed else dot_color
                 color = draw.with_alpha(color, alpha * (1.0 if typed or not prefix else 0.75))
                 if sym == ".":
-                    draw.circle(surf, color, (gx + 2, cy), 2.0)
-                    gx += 7
+                    draw.circle(surf, color, (gx + 2, cy), 1.7)
+                    gx += 6
                 else:
-                    draw.capsule(surf, color, (gx + 3.5, cy), 7, 3.2)
-                    gx += 10
+                    draw.capsule(surf, color, (gx + 3, cy), 6, 2.8)
+                    gx += 8
 
-        foot = self.text("mono", 10, PUNCTUATION_HINT, TEXT_FAINT)
-        surf.blit(foot, (14, r.h - 24))
+        foot = self.text("mono", 9, PUNCTUATION_HINT, TEXT_FAINT)
+        surf.blit(foot, (10, r.h - 18))
         return surf
 
     def _draw_bottom(self, state: HudState, now: float) -> None:
         r = self.rect_bottom
-        x0 = r.x + 20
+        x0 = r.x + 14
 
         # Row 1: caption and keyboard hints
-        self.blit(self.label("Current letter"), (x0, r.y + 16))
-        self._draw_key_hints(r.right - 20, r.y + 21, state)
+        self.blit(self.label("Current letter"), (x0, r.y + 9))
+        self._draw_key_hints(r.right - 14, r.y + 14, state)
 
         # Row 2: the dots and dashes typed so far, and the pause countdown
-        cy = r.y + 56
+        cy = r.y + 36
         shake = 0.0
         dt = now - self._shake_start
         if dt < 0.35:
@@ -495,7 +511,7 @@ class Hud:
             if down:
                 self._draw_live_press(state, end, cy)
             if state.code:
-                self._draw_prediction(state, r.right - 20, cy)
+                self._draw_prediction(state, r.right - 14, cy)
         elif state.pause_kind == "space":
             color = ACTION_COLORS["word"]
             draw.ring(self.ui, (255, 255, 255, 40), (x0 + 9, cy), 8, 2)
@@ -510,21 +526,23 @@ class Hud:
                                 WARNING), (x0, cy), "midleft")
         else:
             self.blit(self.text("regular", 14,
-                                "Go down quickly for a dot, hold down for a dash",
+                                ("Go down quickly for a dot, hold down for a dash"
+                                 if state.ready else
+                                 "Get into push-up position, whole body in view"),
                                 TEXT_FAINT), (x0 + shake, cy), "midleft")
 
         # Divider
         pygame.draw.line(self.ui, (255, 255, 255, 22),
-                         (x0, r.y + 84), (r.right - 20, r.y + 84))
+                         (x0, r.y + 55), (r.right - 14, r.y + 55))
 
         # Row 3: the decoded message with a blinking caret
-        self.blit(self.label("Message"), (x0, r.y + 96))
+        self.blit(self.label("Message"), (x0, r.y + 61))
         if state.text:
             n = len(state.text)
             count = self.text("regular", 11, f"{n} char" + ("" if n == 1 else "s"), TEXT_FAINT)
-            self.blit(count, (r.right - 20, r.y + 95), "topright")
+            self.blit(count, (r.right - 14, r.y + 60), "topright")
 
-        font = self.fonts.get("medium", 26)
+        font = self.fonts.get("medium", 20)
         max_w = r.w - 60
         shown = state.text
         # Keep the end of the message visible when it gets too long.
@@ -533,18 +551,18 @@ class Hud:
         if shown != state.text:
             shown = "…" + shown[1:]
 
-        ty = r.y + 128
+        ty = r.y + 84
         if shown:
             surf = font.render(shown, True, TEXT)
             rect = self.blit(surf, (x0, ty), "midleft")
             caret_x = rect.right + 3
         else:
-            self.blit(self.text("regular", 20, "Your message appears here", TEXT_FAINT),
+            self.blit(self.text("regular", 15, "Your message appears here", TEXT_FAINT),
                       (x0 + 8, ty), "midleft")
             caret_x = x0
 
         if (now * 1.8) % 1.0 < 0.6:
-            caret = pygame.Rect(0, 0, 2, 24)
+            caret = pygame.Rect(0, 0, 2, 19)
             caret.midleft = (caret_x, ty)
             pygame.draw.rect(self.ui, ACCENT, caret, border_radius=1)
             draw.glow(self.glow, ACCENT, caret.center, 10, 0.5)
@@ -558,19 +576,19 @@ class Hud:
             if is_last:
                 grow = draw.ease_out_back(t / 0.18)
             if sym == ".":
-                color, cx, width = ACTION_COLORS["dot"], x + 8, 28
-                draw.glow(self.glow, color, (cx, cy), 18, 0.55 * grow)
-                draw.circle(self.ui, color, (cx, cy), 7.5 * grow)
+                color, cx, width = ACTION_COLORS["dot"], x + 6, 21
+                draw.glow(self.glow, color, (cx, cy), 14, 0.55 * grow)
+                draw.circle(self.ui, color, (cx, cy), 5.5 * grow)
             else:
-                color, cx, width = ACTION_COLORS["dash"], x + 17, 48
-                draw.glow(self.glow, color, (cx, cy), 24, 0.55 * grow)
-                draw.capsule(self.ui, color, (cx, cy), 34 * grow, 13 * grow)
+                color, cx, width = ACTION_COLORS["dash"], x + 13, 36
+                draw.glow(self.glow, color, (cx, cy), 18, 0.55 * grow)
+                draw.capsule(self.ui, color, (cx, cy), 26 * grow, 10 * grow)
 
             # A quick ripple on the newest symbol confirms the push-up landed.
             if is_last and t < 0.35:
                 k = t / 0.35
                 draw.ring(self.ui, draw.with_alpha(color, 1.0 - k), (cx, cy),
-                          10 + 18 * draw.ease_out_cubic(k), 2)
+                          8 + 12 * draw.ease_out_cubic(k), 2)
                 draw.glow(self.glow, color, (cx, cy), 30, 0.8 * (1.0 - k))
             x += width
         return x
@@ -585,8 +603,8 @@ class Hud:
             return
         k = state.pressed_time / max(state.dash_after, 1e-3)
         color = ACTION_COLORS["dot"]
-        length = 15 + 19 * k
-        rect = pygame.Rect(0, 0, round(length), 15)
+        length = 11 + 15 * k
+        rect = pygame.Rect(0, 0, round(length), 11)
         rect.midleft = (round(x + 1), round(cy))
         draw.rounded_rect(self.ui, draw.with_alpha(color, 0.9), rect, 8, 2)
         draw.glow(self.glow, color, rect.center, 16, 0.4)
@@ -595,24 +613,24 @@ class Hud:
         """Countdown ring with the letter that the pause will commit."""
         code = state.code
         color = ACTION_COLORS["letter"]
-        centre = (right - 22, cy)
+        centre = (right - 16, cy)
         char = decode(code)
         options = candidates(code)
 
         progress = state.pause_progress if state.pause_kind == "letter" else 0.0
-        draw.ring(self.ui, (255, 255, 255, 40), centre, 21, 3)
-        draw.arc(self.ui, color, centre, 21, 0, 2 * math.pi * progress, 3.5)
+        draw.ring(self.ui, (255, 255, 255, 40), centre, 15, 2)
+        draw.arc(self.ui, color, centre, 15, 0, 2 * math.pi * progress, 3)
         if progress > 0:
             draw.glow(self.glow, color, centre, 26, 0.35 * progress)
         if char is not None:
-            glyph = self.text("display", 22, char, TEXT)
+            glyph = self.text("display", 17, char, TEXT)
         elif options:
             glyph = self.text("display", 18, "\u2026", TEXT_MUTED)
         else:
             glyph = self.text("display", 20, "?", DANGER)
         self.blit(glyph, centre, "center")
 
-        left = right - 56
+        left = right - 40
         if char is not None:
             self.blit(self.text("regular", 12, "stay up to confirm", TEXT_MUTED),
                       (left, cy), "midright")
