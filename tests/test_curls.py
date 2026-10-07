@@ -4,7 +4,7 @@ import unittest
 
 from blink_morse.arm_tracker import (ArmPose, build_result, curl_from_angle,
                                      elbow_angle)
-from blink_morse.config import PushupSettings
+from blink_morse.config import SitupSettings
 from blink_morse.curls import CurlDetector, CurlKind
 from blink_morse.morse import MorseComposer
 
@@ -83,10 +83,10 @@ class CurlDetectorTest(unittest.TestCase):
         events, _ = play(self.d, [(0.3, None, UP), (0.3, None, DOWN)], self.t)
         self.assertEqual(kinds(events), [CurlKind.DOT])
 
-    def test_pushup_letter_after_3t_and_space_after_5t(self):
-        s = PushupSettings(time_unit=0.5)
+    def test_situp_letter_after_3t_and_space_after_5t(self):
+        s = SitupSettings(time_unit=0.5)
         self.assertEqual((s.dash_after, s.letter_gap, s.word_gap), (0.75, 1.5, 2.5))
-        d = CurlDetector(s.down_threshold, s.time_unit)
+        d = CurlDetector(s.up_threshold, s.time_unit)
         composer = MorseComposer(s.letter_gap, s.word_gap)
         _, t = play(d, [(0.5, None, DOWN)])
         # quick down (dot), up, long down (dash), then stay up 1.2 s
@@ -99,58 +99,60 @@ class CurlDetectorTest(unittest.TestCase):
         self.assertEqual(composer.text, "A ")
 
 
-class PushupDepthTest(unittest.TestCase):
-    def test_depth_from_elbow_angle(self):
-        from blink_morse.arm_tracker import pushup_depth
-        self.assertEqual(pushup_depth(175), 0.0)      # arms straight, up
-        self.assertEqual(pushup_depth(70), 1.0)       # chest down
-        self.assertAlmostEqual(pushup_depth(120), 0.5)
-
-
-def body_landmarks(horizontal=True, legs=True):
-    """33 landmarks of a side-on body, lying down or standing up."""
+def body_landmarks(pose="lying", legs=True):
+    """33 landmarks of a side-on body: lying (knees bent), sat up, or standing."""
     lm = [(0.5, 0.5, 0.0)] * 33
-    if horizontal:
-        pts = {11: (0.3, 0.6), 12: (0.3, 0.6), 13: (0.3, 0.7), 14: (0.3, 0.7),
-               15: (0.3, 0.8), 16: (0.3, 0.8), 23: (0.55, 0.63), 24: (0.55, 0.63),
-               25: (0.7, 0.66), 26: (0.7, 0.66), 27: (0.85, 0.7), 28: (0.85, 0.7)}
-    else:
-        pts = {11: (0.5, 0.2), 12: (0.5, 0.2), 13: (0.5, 0.35), 14: (0.5, 0.35),
-               15: (0.5, 0.45), 16: (0.5, 0.45), 23: (0.5, 0.5), 24: (0.5, 0.5),
-               25: (0.5, 0.7), 26: (0.5, 0.7), 27: (0.5, 0.9), 28: (0.5, 0.9)}
+    if pose == "lying":          # back on the floor, knees up, feet on floor
+        pts = {11: (0.25, 0.80), 23: (0.50, 0.82), 25: (0.62, 0.65), 27: (0.72, 0.82)}
+    elif pose == "up":           # torso raised, legs unchanged
+        pts = {11: (0.40, 0.50), 23: (0.50, 0.82), 25: (0.62, 0.65), 27: (0.72, 0.82)}
+    else:                        # standing
+        pts = {11: (0.5, 0.2), 23: (0.5, 0.5), 25: (0.5, 0.7), 27: (0.5, 0.9)}
     for i, (x, y) in pts.items():
-        if not legs and i in (25, 26, 27, 28):
+        if not legs and i in (25, 27):
             continue
-        lm[i] = (x, y, 0.9)
+        lm[i] = lm[i + 1] = (x, y, 0.9)      # same point for both sides
     return lm
 
 
+class SitupMeasureTest(unittest.TestCase):
+    def test_height_lying_and_up(self):
+        from blink_morse.posture import situp_height, torso_elevation
+        lying = torso_elevation(body_landmarks("lying"), 640, 480)
+        up = torso_elevation(body_landmarks("up"), 640, 480)
+        self.assertLess(lying, 10)
+        self.assertGreater(up, 60)
+        self.assertEqual(situp_height(lying), 0.0)
+        self.assertEqual(situp_height(up), 1.0)
+
+
 class PostureTest(unittest.TestCase):
-    def test_lying_horizontal_is_ready(self):
+    def test_lying_is_ready_and_stays_ready_when_sitting_up(self):
         from blink_morse.posture import PostureGate
         g = PostureGate()
-        self.assertTrue(g.update(body_landmarks(True), 640, 480, 0.0))
+        self.assertTrue(g.update(body_landmarks("lying"), 640, 480, 0.0))
+        self.assertTrue(g.update(body_landmarks("up"), 640, 480, 0.5))
 
     def test_standing_is_not_ready(self):
         from blink_morse.posture import PostureGate
         g = PostureGate()
-        self.assertFalse(g.update(body_landmarks(False), 640, 480, 0.0))
-        self.assertIn("horizontal", g.reason)
+        self.assertFalse(g.update(body_landmarks("standing"), 640, 480, 0.0))
+        self.assertIn("lying", g.reason)
 
     def test_body_cut_off_is_not_ready(self):
         from blink_morse.posture import PostureGate
         g = PostureGate()
-        self.assertFalse(g.update(body_landmarks(True, legs=False), 640, 480, 0.0))
+        self.assertFalse(g.update(body_landmarks("lying", legs=False), 640, 480, 0.0))
         self.assertIn("whole body", g.reason)
 
     def test_one_bad_frame_does_not_cancel(self):
         from blink_morse.posture import PostureGate
         g = PostureGate()
-        g.update(body_landmarks(True), 640, 480, 0.0)
-        self.assertTrue(g.update(body_landmarks(False), 640, 480, 0.1))
-        self.assertTrue(g.update(body_landmarks(True), 640, 480, 0.2))
-        g.update(body_landmarks(False), 640, 480, 0.3)
-        self.assertFalse(g.update(body_landmarks(False), 640, 480, 0.7))
+        g.update(body_landmarks("lying"), 640, 480, 0.0)
+        self.assertTrue(g.update(body_landmarks("standing"), 640, 480, 0.1))
+        self.assertTrue(g.update(body_landmarks("lying"), 640, 480, 0.2))
+        g.update(body_landmarks("standing"), 640, 480, 0.3)
+        self.assertFalse(g.update(body_landmarks("standing"), 640, 480, 0.7))
 
 
 class GateTest(unittest.TestCase):

@@ -1,7 +1,7 @@
 """
-Push-up Morse - type Morse code by doing push-ups in front of a webcam.
-Down < 1.5 t = dot, down >= 1.5 t = dash, up 3 t = end of letter,
-up 5 t = space.
+Sit-up Morse - type Morse code by doing sit-ups in front of a webcam.
+Up < 1.5 t = dot, up >= 1.5 t = dash, lying down 3 t = end of letter,
+lying down 5 t = space.
 
 Run:  python main.py
 Keys: X settings, Z hide UI, P pause listening, H toggle chart, M mute,

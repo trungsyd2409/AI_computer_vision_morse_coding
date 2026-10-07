@@ -43,7 +43,7 @@ POSE_MODEL_URL = (
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Push-up Morse"
+APP_TITLE = "Sit-up Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -64,8 +64,8 @@ DANGER = (251, 113, 133)
 # One colour per action so the legend, the meters, the typed symbols and
 # the pause countdown all speak the same visual language.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # short push-up (quick down)
-    "dash": (167, 139, 250),      # long push-up (hold down)
+    "dot": (103, 232, 249),       # short sit-up (quick up)
+    "dash": (167, 139, 250),      # long sit-up (hold up)
     "letter": (251, 191, 36),     # short pause -> end of letter
     "word": (74, 222, 128),       # long pause  -> space
 }
@@ -99,16 +99,16 @@ class CameraSettings:
 
 
 @dataclass
-class PushupSettings:
-    """Threshold and timing for reading push-ups."""
+class SitupSettings:
+    """Threshold and timing for reading sit-ups."""
 
-    # Depth is a 0..1 score from the elbow angle: 0 = arms straight, body
-    # up (about 160 deg or more), 1 = chest down (about 80 deg). Above
-    # `down_threshold` the body counts as "down" (key pressed).
-    down_threshold: float = 0.50
+    # Height is a 0..1 score from the torso angle above the floor:
+    # 0 = lying flat (about 15 deg or less), 1 = sat up (about 60 deg).
+    # Above `up_threshold` the body counts as "up" (key pressed).
+    up_threshold: float = 0.50
     # The Morse time unit t, in seconds:
-    # down < 1.5 t = dot, down >= 1.5 t = dash,
-    # up 3 t = end of letter, up 5 t = space.
+    # up < 1.5 t = dot, up >= 1.5 t = dash,
+    # lying down 3 t = end of letter, lying down 5 t = space.
     time_unit: float = 0.60
 
     @property
@@ -127,7 +127,7 @@ class PushupSettings:
 @dataclass
 class AppSettings:
     camera: CameraSettings = field(default_factory=CameraSettings)
-    pushup: PushupSettings = field(default_factory=PushupSettings)
+    situp: SitupSettings = field(default_factory=SitupSettings)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -143,7 +143,7 @@ class AppSettings:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             return settings
-        for name in ("camera", "pushup"):
+        for name in ("camera", "situp"):
             section = getattr(settings, name)
             saved = data.get(name, {})
             for f in fields(section):

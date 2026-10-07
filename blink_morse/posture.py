@@ -1,21 +1,28 @@
 """
-Push-up posture check: push-ups only count while the whole body is in
-view and lying horizontally (the plank / push-up position). Standing up
-and bending the elbows, or only the upper body in frame, types nothing.
+Sit-up posture check and measurement.
+
+Sit-ups only count while the whole body is in view and lying on the floor
+(side-on to the camera). Standing, sitting on a chair, or only the upper
+body in frame types nothing.
 
 Rules
 -----
 * Whole body visible: on at least one side of the body the shoulder, hip,
-  knee and ankle are all visible, plus at least one full arm
-  (shoulder, elbow, wrist).
-* Horizontal: the line from the middle of the shoulders to the middle of
-  the ankles is within `MAX_TILT` degrees of horizontal, measured in
-  pixels so the image aspect ratio does not bend it.
+  knee and ankle are all visible.
+* Lying on the floor: the line from the hip to the ankle (the legs, which
+  stay on the floor during a sit-up) is within `MAX_TILT` degrees of
+  horizontal. Pixels are used so the image aspect ratio does not bend it.
+  The torso is not part of this test, because it rises during the sit-up.
+
+Measurement
+-----------
+`torso_elevation` is the angle of the hip -> shoulder line above the
+floor: about 0-15 deg lying flat, 60-90 deg sitting up.
 
 Hysteresis and a short grace period keep the check from flickering: the
 posture becomes "ready" under `MAX_TILT` degrees and only stops being
 ready above `RELEASE_TILT` degrees, or after it has looked wrong for
-`GRACE` seconds in a row (one bad frame does not cancel a push-up).
+`GRACE` seconds in a row (one bad frame does not cancel a sit-up).
 """
 
 import math
@@ -24,45 +31,70 @@ from typing import Optional
 # MediaPipe pose indices per side: (shoulder, hip, knee, ankle)
 LEFT_BODY = (11, 23, 25, 27)
 RIGHT_BODY = (12, 24, 26, 28)
-LEFT_ARM = (11, 13, 15)
-RIGHT_ARM = (12, 14, 16)
 MIN_VIS = 0.5
+
+LYING_ANGLE = 15.0        # torso elevation that counts as fully down
+UP_ANGLE = 60.0           # torso elevation that counts as fully up
 
 
 def _vis(lm, i) -> bool:
     return lm[i][2] >= MIN_VIS
 
 
-def body_tilt(landmarks, width: int, height: int) -> tuple:
+def _sides(landmarks) -> list:
+    if not landmarks or len(landmarks) < 33:
+        return []
+    return [s for s in (LEFT_BODY, RIGHT_BODY) if all(_vis(landmarks, i) for i in s)]
+
+
+def _mid(landmarks, sides, index, width, height):
+    """Average pixel position of one joint (0 shoulder .. 3 ankle) over the visible sides."""
+    pts = [landmarks[s[index]] for s in sides]
+    return (sum(p[0] for p in pts) / len(pts) * width,
+            sum(p[1] for p in pts) / len(pts) * height)
+
+
+def legs_tilt(landmarks, width: int, height: int) -> tuple:
     """
     landmarks: 33 (x, y, visibility) in normalised image coordinates.
-    Returns (tilt in degrees or None, reason). tilt is None when the
-    whole body is not visible; reason says what is missing.
+    Returns (tilt of the hip -> ankle line in degrees, or None, reason).
     """
-    if not landmarks or len(landmarks) < 33:
+    if not landmarks:
         return None, "no body"
-    lm = landmarks
-    sides = [s for s in (LEFT_BODY, RIGHT_BODY) if all(_vis(lm, i) for i in s)]
+    sides = _sides(landmarks)
     if not sides:
         return None, "whole body not in view"
-    if not any(all(_vis(lm, i) for i in arm) for arm in (LEFT_ARM, RIGHT_ARM)):
-        return None, "arms not in view"
-
-    def mid(index):           # index into (shoulder, hip, knee, ankle)
-        pts = [lm[s[index]] for s in sides]
-        return (sum(p[0] for p in pts) / len(pts) * width,
-                sum(p[1] for p in pts) / len(pts) * height)
-
-    (sx, sy), (ax, ay) = mid(0), mid(3)
-    dx, dy = abs(ax - sx), abs(ay - sy)
+    (hx, hy), (ax, ay) = _mid(landmarks, sides, 1, width, height), \
+        _mid(landmarks, sides, 3, width, height)
+    dx, dy = abs(ax - hx), abs(ay - hy)
     if dx < 1e-6 and dy < 1e-6:
         return None, "whole body not in view"
     return math.degrees(math.atan2(dy, dx)), ""
 
 
+def torso_elevation(landmarks, width: int, height: int) -> Optional[float]:
+    """Angle of the hip -> shoulder line above horizontal, in degrees (0..90)."""
+    sides = _sides(landmarks)
+    if not sides:
+        return None
+    (sx, sy), (hx, hy) = _mid(landmarks, sides, 0, width, height), \
+        _mid(landmarks, sides, 1, width, height)
+    rise = hy - sy                      # image y grows downwards
+    run = abs(sx - hx)
+    if rise <= 0:
+        return 0.0                      # shoulders at or below the hips: lying
+    return math.degrees(math.atan2(rise, max(run, 1e-6)))
+
+
+def situp_height(elevation: float) -> float:
+    """Torso elevation -> 0 (lying flat) .. 1 (sat up)."""
+    k = (elevation - LYING_ANGLE) / (UP_ANGLE - LYING_ANGLE)
+    return min(1.0, max(0.0, k))
+
+
 class PostureGate:
-    MAX_TILT = 35.0       # degrees from horizontal to become ready
-    RELEASE_TILT = 45.0   # degrees from horizontal to stop being ready
+    MAX_TILT = 35.0       # legs within this many degrees of horizontal = lying
+    RELEASE_TILT = 45.0   # stop being ready above this
     GRACE = 0.3           # seconds a bad posture is tolerated while ready
 
     def __init__(self):
@@ -78,7 +110,7 @@ class PostureGate:
         self._bad_since = None
 
     def update(self, landmarks, width: int, height: int, now: float) -> bool:
-        self.tilt, reason = body_tilt(landmarks, width, height)
+        self.tilt, reason = legs_tilt(landmarks, width, height)
         if self.tilt is None:
             good = False
         elif self.ready:
@@ -86,7 +118,7 @@ class PostureGate:
         else:
             good = self.tilt <= self.MAX_TILT
         if not good and not reason:
-            reason = f"body not horizontal ({round(self.tilt)}°)"
+            reason = f"not lying down ({round(self.tilt)}°)"
         self.reason = reason
 
         if good:

@@ -1,3 +1,3 @@
-"""Push-up Morse: type Morse code with push-ups (elbow angle) using a webcam."""
+"""Sit-up Morse: type Morse code with sit-ups (torso angle) using a webcam."""
 
-__version__ = "4.0.0"
+__version__ = "5.0.0"
