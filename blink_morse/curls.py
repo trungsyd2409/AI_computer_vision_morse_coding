@@ -1,5 +1,5 @@
 """
-Generic "press" timer. The app now feeds it the push-up depth (body down =
+Generic "press" timer. The app feeds it the squat depth (body down =
 pressed); it was first written for arm curls, hence the names.
 
 Turns the curl of the arms into Morse dots and dashes, using how long each

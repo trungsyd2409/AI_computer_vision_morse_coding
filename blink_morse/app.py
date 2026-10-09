@@ -1,15 +1,15 @@
 """
-Application loop: camera -> pose tracking -> sit-ups -> Morse -> screen.
+Application loop: camera -> pose tracking -> squats -> Morse -> screen.
 
 Per frame:
   1. Take the newest camera frame (the camera runs in its own thread).
-  2. Mirror it and run MediaPipe Pose. The angle of the torso above the
-     floor (hip -> shoulder) gives the sit-up height.
-  3. Only while the whole body is in view and lying on the floor (see
-     posture.py), feed the height to the press detector, which times each
-     "up": up < 1.5 t = dot, up >= 1.5 t = dash.
-  4. Let the Morse composer turn time spent lying down into letters (3 t)
-     and spaces (5 t).
+  2. Mirror it and run MediaPipe Pose. The knee angle (hip, knee, ankle)
+     gives the squat depth.
+  3. Only while the two hands touch each other (the switch), feed the
+     depth to the press detector, which times each "down":
+     down < 1.5 t = dot, down >= 1.5 t = dash.
+  4. Let the Morse composer turn time spent standing into letters (5 t)
+     and spaces (10 t).
   5. Draw the HUD, including a thin whole-body skeleton, and let the GPU
      compose the final image.
 
@@ -26,10 +26,10 @@ import pygame
 
 from .audio import SoundBank
 from .arm_tracker import ArmTracker
-from .posture import PostureGate, situp_height, torso_elevation
+from .posture import HandsGate, knee_angle, squat_depth
 from .camera import CameraStream
 from .compositor import Compositor, cover_crop
-from .config import APP_TITLE, WINDOW_SIZE, AppSettings, CameraSettings, SitupSettings
+from .config import APP_TITLE, WINDOW_SIZE, AppSettings, CameraSettings, SquatSettings
 from .curls import CurlDetector, CurlKind
 from .hud import Hud, HudState
 from .morse import EventKind, MorseComposer
@@ -43,7 +43,7 @@ class BlinkMorseApp:
         # The model is loaded before the window opens so a first-run
         # download does not leave a frozen black window on screen.
         self.tracker = ArmTracker()
-        self.posture = PostureGate()
+        self.hands_gate = HandsGate(self.settings.squat.touch_ratio)
 
         pygame.init()
         pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
@@ -54,7 +54,7 @@ class BlinkMorseApp:
         pygame.display.gl_set_attribute(pygame.GL_CONTEXT_FLAGS,
                                         pygame.GL_CONTEXT_FORWARD_COMPATIBLE_FLAG)
         # VSync off: the camera already paces the loop, and vsync would add
-        # up to one extra frame of latency between a sit-up and its feedback.
+        # up to one extra frame of latency between a squat and its feedback.
         pygame.display.gl_set_attribute(pygame.GL_SWAP_CONTROL, 0)
         pygame.display.set_mode(WINDOW_SIZE, pygame.OPENGL | pygame.DOUBLEBUF)
         pygame.display.set_caption(APP_TITLE)
@@ -67,10 +67,10 @@ class BlinkMorseApp:
         self.camera = CameraStream(self.settings.camera)
         self.camera.start()
 
-        e = self.settings.situp
+        e = self.settings.squat
         # The curl detector is a generic "press" timer: here the press is
-        # the torso being up in a sit-up.
-        self.detector = CurlDetector(e.up_threshold, e.time_unit)
+        # the body being down in a squat.
+        self.detector = CurlDetector(e.down_threshold, e.time_unit)
         self.composer = MorseComposer(e.letter_gap, e.word_gap)
         self.settings_link = SettingsLink()
 
@@ -161,7 +161,7 @@ class BlinkMorseApp:
         state = self._state
         state.body = False
         self._body_pts = None
-        self.posture.reset()
+        self.hands_gate.reset()
         # Start timing afresh, so time spent with the UI hidden is not
         # counted as a pause that ends the letter.
         self.detector.reset(time.perf_counter())
@@ -184,35 +184,41 @@ class BlinkMorseApp:
 
         state = self._state
         h, w = frame_rgb.shape[:2]
-        ready = self.posture.update(None if body is None else body.landmarks, w, h, now)
-        angle = None if body is None else torso_elevation(body.landmarks, w, h)
+        landmarks = None if body is None else body.landmarks
+        touching = self.hands_gate.update(landmarks, w, h, now)
+        angle = None if body is None else knee_angle(landmarks, body.world, w, h)
         if angle is None:
-            # Body not fully in view: nothing can be pressed, pauses keep counting.
-            self.detector.reset()
-            state.angle = None
-        elif not ready:
-            # Not lying on the floor (standing, on a chair...): show the
-            # angle but type nothing. After lying down, the back must touch
-            # down once before the first sit-up counts.
+            # Legs not in view: nothing can be measured or pressed. Pauses
+            # keep counting, and a squat in progress is dropped.
             self.detector.cancel(now)
-            self.detector.curl["right"] = situp_height(angle)
+            self.detector.curl["right"] = 0.0
+            state.angle = None
+        elif not touching:
+            # Hands apart: show the depth but type nothing. After touching
+            # the hands again, stand up once before the first squat counts.
+            self.detector.cancel(now)
+            self.detector.curl["right"] = squat_depth(angle)
             state.angle = angle
         else:
-            height = situp_height(angle)
-            for event in self.detector.update(None, height, now):
+            depth = squat_depth(angle)
+            for event in self.detector.update(None, depth, now):
                 if not self.paused:
                     self._handle_press(event, now)
             state.angle = angle
         state.body = body is not None
-        state.ready = ready
-        state.posture = "lying down" if ready else self.posture.reason
-        state.tilt = self.posture.tilt
+        state.touching = touching
+        state.ready = touching and angle is not None
+        if touching and angle is None:
+            state.posture = "legs not in view"
+        else:
+            state.posture = self.hands_gate.reason
+        state.hands_ratio = self.hands_gate.ratio
         state.depth = self.detector.curl["right"]
         state.pressed = self.detector.pressed
         self._update_body_points(body, frame_rgb.shape)
 
-        # Pauses end letters and words: time spent lying down (or out of
-        # view) since the last sit-up keeps counting.
+        # Pauses end letters and words: time spent standing (or out of
+        # view) since the last squat keeps counting.
         for event in self.composer.update(self.detector.pause_time(now)):
             self._apply_composer(event, now)
         self.compositor.update_camera(frame_rgb)
@@ -275,7 +281,7 @@ class BlinkMorseApp:
                 if section == "camera":
                     self._apply_camera_setting(key, value)
                 else:
-                    self._apply_situp_setting(key, value)
+                    self._apply_squat_setting(key, value)
             elif msg[0] == "action":
                 if msg[1] == "driver_dialog":
                     self.camera.open_driver_dialog()
@@ -298,10 +304,11 @@ class BlinkMorseApp:
             setattr(cam, key, value)
             self.camera.set_property(key, value)
 
-    def _apply_situp_setting(self, key: str, value) -> None:
-        e = self.settings.situp
+    def _apply_squat_setting(self, key: str, value) -> None:
+        e = self.settings.squat
         setattr(e, key, value)
-        self.detector.curl_threshold = e.up_threshold
+        self.hands_gate.touch_ratio = e.touch_ratio
+        self.detector.curl_threshold = e.down_threshold
         self.detector.time_unit = e.time_unit
         self.composer.letter_gap = e.letter_gap
         self.composer.word_gap = e.word_gap
@@ -311,8 +318,8 @@ class BlinkMorseApp:
         fresh_cam = CameraSettings(index=index)
         for field_name, value in vars(fresh_cam).items():
             setattr(self.settings.camera, field_name, value)
-        for field_name, value in vars(SitupSettings()).items():
-            self._apply_situp_setting(field_name, value)
+        for field_name, value in vars(SquatSettings()).items():
+            self._apply_squat_setting(field_name, value)
         self.camera.restore_driver_defaults()
         self.camera.reopen()
         # Send the driver values again so the rebuilt sliders match them.
@@ -340,10 +347,10 @@ class BlinkMorseApp:
 
     def _render(self, now: float) -> None:
         state = self._state
-        e = self.settings.situp
+        e = self.settings.squat
         state.fps = self.fps
         state.camera_error = self.camera.error
-        state.threshold = e.up_threshold
+        state.threshold = e.down_threshold
         state.release_threshold = self.detector.release_threshold
         state.dash_after = e.dash_after
         state.letter_gap = e.letter_gap

@@ -1,7 +1,7 @@
 """
-Sit-up Morse - type Morse code by doing sit-ups in front of a webcam.
-Up < 1.5 t = dot, up >= 1.5 t = dash, lying down 3 t = end of letter,
-lying down 5 t = space.
+Squat Morse - type Morse code by doing squats in front of a webcam.
+Touch your hands together to switch typing on. Down < 1.5 t = dot,
+down >= 1.5 t = dash, standing 5 t = end of letter, standing 10 t = space.
 
 Run:  python main.py
 Keys: X settings, Z hide UI, P pause listening, H toggle chart, M mute,

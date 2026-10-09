@@ -1,6 +1,6 @@
-# Sit-up Morse
+# Squat Morse
 
-Type Morse code by doing sit-ups: coming up briefly is a dot, holding the up position is a dash, and lying back down marks the end of a letter or a word. The app measures the angle of your torso above the floor with MediaPipe Pose and draws a thin, small skeleton of the whole body on the camera image.
+Type Morse code by doing squats: going down briefly is a dot, holding the squat is a dash, and standing up marks the end of a letter or a word. Typing is only on while your **two hands touch each other**, for example clasped in front of your chest. The app measures the knee angle with MediaPipe Pose and draws a thin, small skeleton of the whole body on the camera image.
 
 ![Interface preview](docs/preview.png)
 <sub>Interface preview, rendered with a placeholder camera image.</sub>
@@ -62,22 +62,22 @@ The tests cover the Morse logic, the blink detector and the left/right eye mappi
 
 ## How to use it
 
-Put the camera on the floor or a low shelf, **side-on** to you, so your whole body is in view while you lie down. Each sit-up is read from the angle of the hip-to-shoulder line above the floor: about 15° or less = **lying down**, about 60° = **up**. The torso counts as up once the height passes the **up threshold** (50 % ≈ 37°), and as lying down again once it drops 10 % below it.
+Stand so that your whole body is in view (front or side both work). Squats are read from the knee angle (hip, knee, ankle), averaged over the legs the camera can see: about 165° or more = **standing**, about 95° = **deep squat**. The body counts as down once the depth passes the **down threshold** (50 % ≈ 130°), and as standing again once it rises 10 % above it.
+
+**Switch: touch your hands together.** Input is on only while the two hands touch, so you can clasp them in front of your chest and squat. Pull them apart and typing stops at once; a squat in progress is dropped without typing anything. The hands count as touching when the distance between their centres is under 0.30 of your torso length (adjustable, *Hands touch distance* in the settings), so it works at any distance from the camera. When you touch your hands while already squatting, stand up once before the first squat counts.
 
 All timings come from one time unit **t** (0.6 s by default, adjustable in the settings window):
 
-| Sit-up | Result | With t = 0.6 s |
+| Squat | Result | With t = 0.6 s |
 |---|---|---|
-| **Up**, shorter than 1.5 t | Dot `·` | under 0.9 s |
-| **Up**, 1.5 t or longer | Dash `–` | 0.9 s or more |
-| **Lying down for 3 t** | End of letter, the Latin letter pops up | 1.8 s |
-| **Lying down for 5 t** | End of word, a space is added | 3.0 s |
+| **Down**, shorter than 1.5 t | Dot `·` | under 0.9 s |
+| **Down**, 1.5 t or longer | Dash `–` | 0.9 s or more |
+| **Standing for 5 t** | End of letter, the Latin letter pops up | 3.0 s |
+| **Standing for 10 t** | End of word, a space is added | 6.0 s |
 
-**Only sit-ups count.** Input is on only while your **whole body** is in view (shoulder, hip, knee and ankle on at least one side) and you are **lying on the floor** (the hip-to-ankle line within 35° of horizontal; the torso is not checked because it rises during the sit-up). Standing, sitting on a chair, or having only part of your body in frame types nothing. The skeleton is grey while input is off and green once you are lying down; the Pose row in the panel says what is missing. After lying down, put your back down once before the first sit-up counts.
+A dash is typed the moment you have been down for 1.5 t, while you are still down. A dot is typed when you stand back up. Letters and spaces end by time alone, so they also complete if you let go of your hands.
 
-A dash is typed the moment you have been up for 1.5 t, while you are still up. A dot is typed when you lie back down.
-
-**Skeleton.** The whole body is drawn with thin lines and small joints. It turns cyan while you are up (a dot so far) and violet once it has become a dash. The Sit-up height panel shows the height bar (white tick = threshold) and the torso angle.
+**Skeleton.** The whole body is drawn with thin lines and small joints, with a ring on each hand and a line between them. The line is green while the hands touch and faint white while they are apart. The skeleton is grey while input is off, green once the hands touch, cyan while you are down (a dot so far) and violet once it has become a dash. The Squat depth panel shows the depth bar (white tick = threshold), the hands status and the knee angle.
 
 Press **P** to pause listening while you rest, or **Z** to hide the interface and stop input completely. Deleting is done on the keyboard.
 
@@ -105,9 +105,10 @@ Press `X` to open it. It has two tabs. Changes apply instantly and are saved to 
 - Device number, with the device name underneath on Windows (for example "Integrated Webcam" or "Camo"), resolution, target FPS (30 or 60), mirror view, auto exposure, and manual exposure, brightness, contrast and gain.
 - **Driver settings** (Windows) opens the camera maker's own settings dialog.
 
-**Sit-up tab**
-- **Up threshold**: how high you must come up to count (5 % to 95 %, default 50 %).
-- **Time unit t**: the base timing, from 0.1 to 1.5 s. A card below the slider spells out the dot, dash, letter and space timings for the current value.
+**Squat tab**
+- **Down threshold**: how deep you must squat to count as down (5 % to 95 %, default 50 %).
+- **Time unit t**: the base timing, from 0.1 to 1.5 s. A card below the sliders spells out the dot, dash, letter and space timings for the current value.
+- **Hands touch distance**: how close the hands must be to count as touching, as a fraction of your torso length (0.10 to 0.80, default 0.30).
 
 ### Using an iPhone or Android phone as the camera
 
@@ -259,9 +260,9 @@ AI_computer_vision_morse_coding/
 │   ├── app.py               main loop, wires everything together
 │   ├── config.py            constants, colours, saved settings
 │   ├── camera.py            threaded webcam reader
-│   ├── arm_tracker.py       MediaPipe Pose wrapper (body landmarks)
+│   ├── arm_tracker.py       MediaPipe Pose wrapper (2D and 3D body landmarks)
 │   ├── curls.py             press timing detector (dot / dash)
-│   ├── posture.py           whole body visible + lying check, torso angle
+│   ├── posture.py           knee angle / squat depth, hands-touching switch
 │   ├── hand_tracker.py      old fist switch (no longer used by the app)
 │   ├── face_tracker.py      old face input (no longer used by the app)
 │   ├── blinks.py            old blink detector (no longer used by the app)

@@ -120,6 +120,9 @@ class BodyResult:
     # All 33 landmarks as (x, y, visibility), normalised image coordinates,
     # for drawing the whole-body skeleton.
     landmarks: list = field(default_factory=list)
+    # The 3D "world" landmarks as (x, y, z) in metres centred on the hips,
+    # or an empty list when MediaPipe did not return them.
+    world: list = field(default_factory=list)
 
     def elbow_angle(self) -> Optional[float]:
         """Mean elbow angle of the visible arms (a side view often hides one)."""
@@ -191,6 +194,8 @@ class ArmTracker:
         else:
             result.wrists = {"left": mp_wrists[1], "right": mp_wrists[0]}
         result.landmarks = [(p.x, p.y, _visibility(p)) for p in lm]
+        if world is not None:
+            result.world = [(p.x, p.y, p.z) for p in world]
         return result
 
     def close(self) -> None:

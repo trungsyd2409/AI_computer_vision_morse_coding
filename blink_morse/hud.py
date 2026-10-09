@@ -3,8 +3,10 @@ Everything drawn on top of the camera image.
 
 The whole body is drawn as a thin, small skeleton (head circle, torso,
 arms, legs) so the pose is easy to recognise without covering the image.
-It lights up cyan while the torso is up (a dot so far) and violet once
-the sit-up has become a dash. All other feedback lives in the panels.
+A line joins the two hands: green while they touch (typing on), faint
+white while they are apart. The skeleton lights up cyan while the body is
+down (a dot so far) and violet once the squat has become a dash. All
+other feedback lives in the panels.
 The HUD paints into two pygame surfaces every frame:
 
 * `ui`   - transparent layer with text, meters and icons.
@@ -49,24 +51,25 @@ class HudState:
     fps: float = 0.0
     camera_error: Optional[str] = None
     body: bool = False                   # a person is being tracked
-    angle: Optional[float] = None        # torso angle above the floor, degrees
-    depth: float = 0.0                   # sit-up height: 0 = lying flat, 1 = sat up
-    ready: bool = False                  # whole body in view and horizontal
-    posture: str = "no body"             # what the posture check says
-    tilt: Optional[float] = None         # body angle from horizontal, degrees
+    angle: Optional[float] = None        # mean knee angle, degrees
+    depth: float = 0.0                   # squat depth: 0 = standing, 1 = deep squat
+    ready: bool = False                  # hands touching and legs in view
+    posture: str = "no body"             # status of the hands switch
+    hands_ratio: Optional[float] = None  # hand distance / torso length
+    touching: bool = False               # the two hands touch (switch is on)
     # 33 pose landmarks as (x, y, visibility) in window pixels, or None
     skeleton: Optional[list] = None
-    threshold: float = 0.5               # above this the torso counts as up
-    release_threshold: float = 0.4       # below this it counts as lying down again
-    pressed: bool = False                # torso is up
-    pressed_time: float = 0.0            # how long it has been up so far
+    threshold: float = 0.5               # above this the body counts as down
+    release_threshold: float = 0.4       # below this it counts as standing again
+    pressed: bool = False                # body is down
+    pressed_time: float = 0.0            # how long it has been down so far
     paused: bool = False                 # input ignored until P is pressed
     pause_kind: Optional[str] = None     # "letter", "space" or None
     pause_progress: float = 0.0          # 0..1 towards `pause_kind`
     pause_left: float = 0.0              # seconds until it happens
-    dash_after: float = 0.9              # time up that makes a dash
-    letter_gap: float = 1.8
-    word_gap: float = 3.0
+    dash_after: float = 0.9              # time down that makes a dash
+    letter_gap: float = 3.0
+    word_gap: float = 6.0
     code: str = ""
     text: str = ""
     muted: bool = False
@@ -217,7 +220,7 @@ class Hud:
 
     @staticmethod
     def _press_color(state: HudState) -> tuple:
-        """What the sit-up will type if the body lies down now: dot, then dash."""
+        """What the squat will type if the body stands up now: dot, then dash."""
         return ACTION_COLORS["dash" if state.pressed_time >= state.dash_after else "dot"]
 
     # ------------------------------------------------------------------------
@@ -293,6 +296,25 @@ class Hud:
             if ok(i):
                 draw.circle(self.ui, draw.with_alpha(color, alpha), pts[i][:2], 2.5)
 
+        # Hands: a ring on each hand and a line between them. Green while
+        # they touch (typing on), faint white while they are apart.
+        centres = []
+        for ids in ((15, 17, 19, 21), (16, 18, 20, 22)):
+            seen = [pts[i][:2] for i in ids if pts[i][2] >= 0.3]
+            centres.append((sum(p[0] for p in seen) / len(seen),
+                            sum(p[1] for p in seen) / len(seen))
+                           if seen and pts[ids[0]][2] >= 0.3 else None)
+        hand_color = SUCCESS if state.touching else TEXT
+        hand_alpha = 0.95 if state.touching else 0.5
+        for c in centres:
+            if c is not None:
+                draw.ring(self.ui, draw.with_alpha(hand_color, hand_alpha), c, 6, 1)
+                if state.touching:
+                    draw.glow(self.glow, SUCCESS, c, 10, 0.5)
+        if centres[0] is not None and centres[1] is not None:
+            draw.bone(self.ui, draw.with_alpha(hand_color, hand_alpha * 0.8),
+                      centres[0], centres[1], 1.5)
+
         # Head: a small ring around the nose, sized from the ear distance.
         if ok(0):
             nose = pts[0][:2]
@@ -315,7 +337,7 @@ class Hud:
 
     def _draw_title(self, state: HudState) -> None:
         r = self.rect_title
-        self.blit(self.text("semibold", 14, "Sit-up Morse", TEXT), (r.x + 12, r.y + 6))
+        self.blit(self.text("semibold", 14, "Squat Morse", TEXT), (r.x + 12, r.y + 6))
 
         if state.camera_error:
             dot, msg = DANGER, "Camera unavailable"
@@ -324,7 +346,7 @@ class Hud:
         elif state.ready:
             dot, msg = SUCCESS, "Listening"
         elif state.body:
-            dot, msg = WARNING, "Lie down on the floor"
+            dot, msg = WARNING, "Touch your hands together"
         else:
             dot, msg = TEXT_FAINT, "Show your whole body"
 
@@ -338,10 +360,10 @@ class Hud:
         def sec(v):
             return f"{round(v, 2):g} s"
         return [
-            ("dot", "Up short", f"< {sec(state.dash_after)}  \u00b7"),
-            ("dash", "Up long", f"\u2265 {sec(state.dash_after)}  \u2013"),
-            ("letter", f"Lie {sec(state.letter_gap)}", "end letter"),
-            ("word", f"Lie {sec(state.word_gap)}", "space"),
+            ("dot", "Down short", f"< {sec(state.dash_after)}  \u00b7"),
+            ("dash", "Down long", f"\u2265 {sec(state.dash_after)}  \u2013"),
+            ("letter", f"Stand {sec(state.letter_gap)}", "end letter"),
+            ("word", f"Stand {sec(state.word_gap)}", "space"),
         ]
 
     def _draw_legend(self, state: HudState, now: float) -> None:
@@ -367,9 +389,9 @@ class Hud:
                       (r.right - 10, cy), "midright")
 
     def _draw_meters(self, state: HudState) -> None:
-        """Sit-up height bar with the threshold marked, and the torso angle."""
+        """Squat depth bar with the threshold marked, and the hands switch."""
         r = self.rect_meters
-        self.blit(self.label("Sit-up height"), (r.x + 12, r.y + 7))
+        self.blit(self.label("Squat depth"), (r.x + 12, r.y + 7))
         x0, x1 = r.x + 52, r.right - 44
 
         cy = r.y + 29
@@ -378,7 +400,7 @@ class Hud:
         on = state.pressed and visible
         color = self._press_color(state) if on else (
             ACTION_COLORS["dot"] if state.ready else TEXT_FAINT)
-        self.blit(self.text("medium", 11, "Height", TEXT if visible else TEXT_FAINT),
+        self.blit(self.text("medium", 11, "Depth", TEXT if visible else TEXT_FAINT),
                   (r.x + 12, cy), "midleft")
         track = pygame.Rect(x0, cy - 3, x1 - x0, 6)
         draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 3)
@@ -393,20 +415,20 @@ class Hud:
         if not visible:
             status, scol = "-", TEXT_FAINT
         elif on:
-            status, scol = "up", color
+            status, scol = "down", color
         else:
-            status, scol = "down", TEXT_MUTED
+            status, scol = "up", TEXT_MUTED
         self.blit(self.text("regular", 11, status, scol), (r.right - 10, cy), "midright")
 
-        # Row 2: posture check, and the torso angle on the right
+        # Row 2: hands switch, and the knee angle on the right
         cy = r.y + 46
-        self.blit(self.text("medium", 11, "Pose", TEXT if state.body else TEXT_FAINT),
+        self.blit(self.text("medium", 11, "Hands", TEXT if state.body else TEXT_FAINT),
                   (r.x + 12, cy), "midleft")
         dot = SUCCESS if state.ready else (WARNING if state.body else TEXT_FAINT)
         draw.circle(self.ui, dot, (x0 + 3, cy), 3)
         if state.ready:
             draw.glow(self.glow, dot, (x0 + 4, cy), 12, 0.7)
-        text = "ready" if state.ready else state.posture
+        text = "touching" if state.ready else state.posture
         self.blit(self.text("regular", 10, text, SUCCESS if state.ready else TEXT_MUTED),
                   (x0 + 11, cy), "midleft")
         if visible and state.ready:
@@ -505,10 +527,10 @@ class Hud:
         if dt < 0.35:
             shake = math.sin(dt * 60) * 7 * (1 - dt / 0.35)
 
-        up = state.pressed and not state.paused
-        if state.code or up:
+        down = state.pressed and not state.paused
+        if state.code or down:
             end = self._draw_code(state.code, x0 + shake, cy, now)
-            if up:
+            if down:
                 self._draw_live_press(state, end, cy)
             if state.code:
                 self._draw_prediction(state, r.right - 14, cy)
@@ -526,9 +548,9 @@ class Hud:
                                 WARNING), (x0, cy), "midleft")
         else:
             self.blit(self.text("regular", 14,
-                                ("Sit up quickly for a dot, hold up for a dash"
+                                ("Squat down quickly for a dot, hold down for a dash"
                                  if state.ready else
-                                 "Lie down side-on, whole body in view"),
+                                 "Touch your hands together to start"),
                                 TEXT_FAINT), (x0 + shake, cy), "midleft")
 
         # Divider
@@ -584,7 +606,7 @@ class Hud:
                 draw.glow(self.glow, color, (cx, cy), 18, 0.55 * grow)
                 draw.capsule(self.ui, color, (cx, cy), 26 * grow, 10 * grow)
 
-            # A quick ripple on the newest symbol confirms the sit-up landed.
+            # A quick ripple on the newest symbol confirms the squat landed.
             if is_last and t < 0.35:
                 k = t / 0.35
                 draw.ring(self.ui, draw.with_alpha(color, 1.0 - k), (cx, cy),
@@ -595,8 +617,8 @@ class Hud:
 
     def _draw_live_press(self, state: HudState, x: float, cy: float) -> None:
         """
-        While the torso is up, show the symbol the sit-up will produce:
-        a dot outline that stretches into a dash the longer it stays up.
+        While the body is down, show the symbol the squat will produce:
+        a dot outline that stretches into a dash the longer it stays down.
         Once the dash has been typed it appears as a real symbol instead.
         """
         if state.pressed_time >= state.dash_after:
@@ -632,7 +654,7 @@ class Hud:
 
         left = right - 40
         if char is not None:
-            self.blit(self.text("regular", 12, "lie down to confirm", TEXT_MUTED),
+            self.blit(self.text("regular", 12, "stand up to confirm", TEXT_MUTED),
                       (left, cy), "midright")
         elif options:
             preview = "  ".join(options[:6]) + ("  \u2026" if len(options) > 6 else "")

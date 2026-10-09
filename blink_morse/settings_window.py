@@ -1,5 +1,5 @@
 """
-Settings window with two tabs: Camera and Sit-up.
+Settings window with two tabs: Camera and Squat.
 
 It runs in a separate process with its own pygame window. The main window
 uses an OpenGL context, and a second window in the same process would
@@ -26,7 +26,7 @@ from .config import (ACCENT, ACTION_COLORS, DANGER, FPS_CHOICES, MIN_ACCEPTABLE_
 
 ROW_H = 32
 PAD = 24
-TABS = [("Camera", "camera"), ("Sit-up", "situp")]
+TABS = [("Camera", "camera"), ("Squat", "squat")]
 
 
 def list_camera_names() -> list:
@@ -139,7 +139,7 @@ class SettingsWindow:
         self.conn = conn
         self.fonts = Fonts()
         self.values = {"camera": dict(initial["camera"]),
-                       "situp": dict(initial["situp"])}
+                       "squat": dict(initial["squat"])}
         self.stats = {}
         self.camera_names = list_camera_names()
         self.tab = "camera"
@@ -156,7 +156,7 @@ class SettingsWindow:
 
     def _build_widgets(self) -> None:
         cam = self.values["camera"]
-        su = self.values["situp"]
+        sq = self.values["squat"]
         w = SETTINGS_SIZE[0] - 2 * PAD
         self.tab_bar = TabBar(TABS, self.tab)
         self.tab_bar.rect = self.pg.Rect(PAD, 150, w, 34)
@@ -186,11 +186,13 @@ class SettingsWindow:
                 Slider("Contrast", "camera", "contrast", cam["contrast"], 0, 255, 1, "{:.0f}"),
                 Slider("Gain", "camera", "gain", cam["gain"], 0, 255, 1, "{:.0f}"),
             ]),
-            "situp": page([
-                Slider("Up threshold", "situp", "up_threshold",
-                       su["up_threshold"], 0.05, 0.95, 0.01, "{:.0%}"),
-                Slider("Time unit t", "situp", "time_unit",
-                       su["time_unit"], 0.10, 1.50, 0.05, "{:.2f} s"),
+            "squat": page([
+                Slider("Down threshold", "squat", "down_threshold",
+                       sq["down_threshold"], 0.05, 0.95, 0.01, "{:.0%}"),
+                Slider("Time unit t", "squat", "time_unit",
+                       sq["time_unit"], 0.10, 1.50, 0.05, "{:.2f} s"),
+                Slider("Hands touch distance", "squat", "touch_ratio",
+                       sq["touch_ratio"], 0.10, 0.80, 0.01, "{:.2f}"),
             ]),
         }
 
@@ -277,11 +279,11 @@ class SettingsWindow:
         self.conn.send(change)
 
     def _reset(self) -> None:
-        from .config import CameraSettings, SitupSettings
+        from .config import CameraSettings, SquatSettings
         from dataclasses import asdict
-        cam, su = asdict(CameraSettings()), asdict(SitupSettings())
+        cam, sq = asdict(CameraSettings()), asdict(SquatSettings())
         cam["index"] = self.values["camera"]["index"]
-        self.values = {"camera": cam, "situp": su}
+        self.values = {"camera": cam, "squat": sq}
         self._build_widgets()
 
     def _read_pipe(self) -> bool:
@@ -345,7 +347,7 @@ class SettingsWindow:
             enabled = self._enabled(widget)
             widget.draw(s, self, hover=(widget is self.hover), enabled=enabled)
 
-        if self.tab == "situp":
+        if self.tab == "squat":
             self._draw_timing_card()
 
     def _draw_timing_card(self) -> None:
@@ -353,8 +355,8 @@ class SettingsWindow:
         pg = self.pg
         from . import draw
         s = self.screen
-        t = self.values["situp"]["time_unit"]
-        last = self.pages["situp"][-1].rect
+        t = self.values["squat"]["time_unit"]
+        last = self.pages["squat"][-1].rect
         card = pg.Rect(PAD, last.bottom + 18, SETTINGS_SIZE[0] - 2 * PAD, 138)
         layer = pg.Surface(card.size, pg.SRCALPHA)
         draw.rounded_rect(layer, (255, 255, 255, 12), layer.get_rect(), 12)
@@ -363,10 +365,10 @@ class SettingsWindow:
         s.blit(self._label("Timing"), (card.x + 16, card.y + 14))
 
         rows = [
-            (ACTION_COLORS["dot"], "Dot", f"up shorter than {1.5 * t:.2f} s"),
-            (ACTION_COLORS["dash"], "Dash", f"up {1.5 * t:.2f} s or longer"),
-            (ACTION_COLORS["letter"], "End letter", f"lying down {3 * t:.2f} s"),
-            (ACTION_COLORS["word"], "Space", f"lying down {5 * t:.2f} s"),
+            (ACTION_COLORS["dot"], "Dot", f"down shorter than {1.5 * t:.2f} s"),
+            (ACTION_COLORS["dash"], "Dash", f"down {1.5 * t:.2f} s or longer"),
+            (ACTION_COLORS["letter"], "End letter", f"standing {5 * t:.2f} s"),
+            (ACTION_COLORS["word"], "Space", f"standing {10 * t:.2f} s"),
         ]
         for i, (color, name, rule) in enumerate(rows):
             cy = card.y + 46 + i * 24

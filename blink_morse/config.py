@@ -43,7 +43,7 @@ POSE_MODEL_URL = (
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Sit-up Morse"
+APP_TITLE = "Squat Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -64,8 +64,8 @@ DANGER = (251, 113, 133)
 # One colour per action so the legend, the meters, the typed symbols and
 # the pause countdown all speak the same visual language.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # short sit-up (quick up)
-    "dash": (167, 139, 250),      # long sit-up (hold up)
+    "dot": (103, 232, 249),       # short squat (quick down)
+    "dash": (167, 139, 250),      # long squat (hold down)
     "letter": (251, 191, 36),     # short pause -> end of letter
     "word": (74, 222, 128),       # long pause  -> space
 }
@@ -99,17 +99,20 @@ class CameraSettings:
 
 
 @dataclass
-class SitupSettings:
-    """Threshold and timing for reading sit-ups."""
+class SquatSettings:
+    """Threshold and timing for reading squats, and the hands-touching switch."""
 
-    # Height is a 0..1 score from the torso angle above the floor:
-    # 0 = lying flat (about 15 deg or less), 1 = sat up (about 60 deg).
-    # Above `up_threshold` the body counts as "up" (key pressed).
-    up_threshold: float = 0.50
+    # Depth is a 0..1 score from the knee angle: 0 = standing (about 165
+    # deg or more), 1 = deep squat (about 95 deg). Above `down_threshold`
+    # the body counts as "down" (key pressed).
+    down_threshold: float = 0.50
     # The Morse time unit t, in seconds:
-    # up < 1.5 t = dot, up >= 1.5 t = dash,
-    # lying down 3 t = end of letter, lying down 5 t = space.
+    # down < 1.5 t = dot, down >= 1.5 t = dash,
+    # standing 5 t = end of letter, standing 10 t = space.
     time_unit: float = 0.60
+    # Typing is on only while the hands touch. Distance between the hand
+    # centres, as a fraction of the torso length, under which they touch.
+    touch_ratio: float = 0.30
 
     @property
     def dash_after(self) -> float:
@@ -117,17 +120,17 @@ class SitupSettings:
 
     @property
     def letter_gap(self) -> float:
-        return 3.0 * self.time_unit
+        return 5.0 * self.time_unit
 
     @property
     def word_gap(self) -> float:
-        return 5.0 * self.time_unit
+        return 10.0 * self.time_unit
 
 
 @dataclass
 class AppSettings:
     camera: CameraSettings = field(default_factory=CameraSettings)
-    situp: SitupSettings = field(default_factory=SitupSettings)
+    squat: SquatSettings = field(default_factory=SquatSettings)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -143,7 +146,7 @@ class AppSettings:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             return settings
-        for name in ("camera", "situp"):
+        for name in ("camera", "squat"):
             section = getattr(settings, name)
             saved = data.get(name, {})
             for f in fields(section):

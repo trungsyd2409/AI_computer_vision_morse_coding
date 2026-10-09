@@ -1,3 +1,3 @@
-"""Sit-up Morse: type Morse code with sit-ups (torso angle) using a webcam."""
+"""Squat Morse: type Morse code with squats (knee angle) and a hands-touching switch."""
 
-__version__ = "5.0.0"
+__version__ = "6.0.0"
