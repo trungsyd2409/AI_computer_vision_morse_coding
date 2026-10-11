@@ -7,6 +7,7 @@ values without touching the modules that consume them.
 """
 
 import json
+import sys
 from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
 from typing import Optional
@@ -15,12 +16,21 @@ from typing import Optional
 # Paths
 # ---------------------------------------------------------------------------
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+if getattr(sys, "frozen", False):
+    # Running from a PyInstaller build: bundled fonts and models live in the
+    # unpack folder, while settings.json sits next to the .exe so it can be
+    # written and survives between runs.
+    ROOT_DIR = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    SETTINGS_DIR = Path(sys.executable).resolve().parent
+else:
+    ROOT_DIR = Path(__file__).resolve().parent.parent
+    SETTINGS_DIR = ROOT_DIR
+
 ASSETS_DIR = ROOT_DIR / "assets"
 FONTS_DIR = ASSETS_DIR / "fonts"
 MODELS_DIR = ROOT_DIR / "models"
 
-SETTINGS_FILE = ROOT_DIR / "settings.json"   # created on first exit
+SETTINGS_FILE = SETTINGS_DIR / "settings.json"   # created on first exit
 FACE_MODEL_PATH = MODELS_DIR / "face_landmarker.task"
 FACE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
