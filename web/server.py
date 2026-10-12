@@ -456,7 +456,7 @@ def config_from_env(config_path: Path | None = None) -> Config:
         provider=provider,
         model=env("XENO_MODEL", "").strip() or DEFAULT_MODEL[provider],
         host=os.environ.get("XENO_HOST", "127.0.0.1"),
-        port=num("XENO_PORT", 8000),
+        port=num("XENO_PORT", num("PORT", 8000)),   # PORT is what hosts like Render set
         daily_per_ip=num("XENO_DAILY_PER_IP", 200),
         daily_total=num("XENO_DAILY_TOTAL", 1000),
         max_tokens=num("XENO_MAX_TOKENS", 200),
@@ -1257,6 +1257,12 @@ def main() -> int:
     if args.port:
         cfg.port = args.port
 
+    if args.setup_only:
+        # Only downloads files (used as the build step on a host), so no password check here.
+        mp_ok = ensure_mediapipe()
+        model_ok = ensure_model() is not None
+        return 0 if (mp_ok and model_ok) else 1
+
     errors, warnings = check_auth_setup(cfg)
     for line in warnings:
         print(f"Warning: {line}", file=sys.stderr)
@@ -1267,8 +1273,6 @@ def main() -> int:
 
     mp_ok = ensure_mediapipe()
     model_ok = ensure_model() is not None
-    if args.setup_only:
-        return 0 if (mp_ok and model_ok) else 1
 
     try:
         httpd = make_server(cfg)

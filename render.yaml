@@ -1,0 +1,28 @@
+# Render Blueprint for the Xeno Assistant web demo (folder web/).
+# Passwords and the API key are NOT in this file: Render asks for them when you
+# create the Blueprint (sync: false), and keeps them as secrets.
+services:
+  - type: web
+    name: xeno-assistant
+    runtime: python
+    plan: free
+    branch: NewUI_LLM_Deploy
+    rootDir: web
+    buildCommand: python server.py --setup-only
+    startCommand: python server.py
+    healthCheckPath: /api/session
+    envVars:
+      - key: XENO_HOST
+        value: 0.0.0.0
+      - key: XENO_SECURE_COOKIE
+        value: "1"
+      - key: XENO_TRUST_PROXY
+        value: "1"
+      - key: XENO_SESSION_SECRET
+        generateValue: true
+      - key: XENO_MASTER_PASSWORD
+        sync: false
+      - key: XENO_USER_PASSWORD
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

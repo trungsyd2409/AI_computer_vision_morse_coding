@@ -92,7 +92,9 @@ Settings > Reset in the browser goes back to these defaults. A master's changes 
 
 ### Deploy
 
-Use the same variables on the host as secrets or environment variables: `XENO_MASTER_PASSWORD`, `XENO_USER_PASSWORD`, `XENO_SESSION_SECRET` (long random), the API keys, and `XENO_HOST=0.0.0.0`. Behind an https proxy also set `XENO_SECURE_COOKIE=1` and `XENO_TRUST_PROXY=1`. Do not upload `.env`. Camera access needs https.
+**Render.** The repository has a `render.yaml` at its root. In Render choose New > Blueprint, pick the repository, and fill in `XENO_MASTER_PASSWORD`, `XENO_USER_PASSWORD` and `GEMINI_API_KEY` when it asks. Render builds with `python server.py --setup-only` (downloads the face tracking files), starts `python server.py` on the port it gives in `PORT`, and serves it over https. The free plan sleeps after 15 minutes without visitors, so the first visit after that takes about a minute.
+
+**Any other host.** Use the same variables on the host as secrets or environment variables: `XENO_MASTER_PASSWORD`, `XENO_USER_PASSWORD`, `XENO_SESSION_SECRET` (long random), the API keys, and `XENO_HOST=0.0.0.0`. Behind an https proxy also set `XENO_SECURE_COOKIE=1` and `XENO_TRUST_PROXY=1`. Do not upload `.env`. Camera access needs https.
 
 ## How to use it
 
