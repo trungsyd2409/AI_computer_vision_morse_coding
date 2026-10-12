@@ -77,7 +77,16 @@ Everything a new visitor sees first comes from `config.json`:
 
 **Your own Xeno pictures.** Copy them into `public/assets/xeno/` as `open.png` and `closed.png` (or use another name and update `character`). With `characterMode` set to `custom`, they are what everyone sees. If a file is missing the app falls back to the drawn face.
 
-**Your own personality.** Edit the text in `personas.funny` (or change `defaults.personaPreset` to another one), or write a new one in `defaults.personaCustom` and set `personaPreset` to `custom`. Restart the server after editing `config.json`.
+**Your own personality.** Two ways:
+
+- Add a new entry under `personas` with any name made of letters, digits, `-` or `_`, then point `defaults.personaPreset` at that name. It also appears in the Settings list for the master. Give it a `vi` and an `en` text (one is enough, it is used for both) and, if you like, a `label` for the list:
+  ```json
+  "defaults": { "personaPreset": "pirate" },
+  "personas": { "pirate": { "vi": "Bạn nói như hải tặc.", "en": "You talk like a pirate.", "label": "Pirate" } }
+  ```
+- Or edit the text of `funny`, `calm` or `teacher`, or write one in `defaults.personaCustom` and set `personaPreset` to `custom`.
+
+`personaPreset` has to match a name under `personas` exactly (or be `custom`). If it does not, the server prints a `[config]` line when it starts and uses the default `funny`. Restart the server after editing `config.json`.
 
 Settings > Reset in the browser goes back to these defaults. A master's changes live in that browser only, as the difference from the defaults, so a new default in `config.json` reaches everyone except the values they changed themselves.
 

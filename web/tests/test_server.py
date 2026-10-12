@@ -702,8 +702,37 @@ class DefaultsTests(unittest.TestCase):
                                                 "personaCustom": {"vi": "xin chao", "en": "hello"}})
                 self.assertEqual(cfg.personas["funny"]["vi"], "Moi vui")
                 self.assertEqual(cfg.personas["funny"]["en"], server.DEFAULT_PERSONAS["funny"]["en"])
-                self.assertNotIn("ghost", cfg.personas)
+                # a new name adds a personality of your own; one language is enough
+                self.assertEqual(cfg.personas["ghost"], {"vi": "x", "en": "x"})
                 self.assertEqual(cfg.character, {"open": "assets/xeno/open.png"})
+        finally:
+            for k in keep:
+                os.environ.pop(k, None)
+                if keep[k] is not None:
+                    os.environ[k] = keep[k]
+
+
+    def test_own_persona_is_the_default_for_the_user_password(self):
+        import tempfile
+        keep = {k: os.environ.pop(k, None) for k in ("XENO_CONFIG", "XENO_MASTER_PASSWORD", "XENO_USER_PASSWORD")}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "config.json")
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump({"defaults": {"personaPreset": "pirate"},
+                               "personas": {"pirate": {"vi": "Noi nhu hai tac", "en": "Talk like a pirate",
+                                                        "label": "Pirate"}}}, fh)
+                os.environ["XENO_CONFIG"] = path
+                cfg = server.config_from_env()
+                self.assertEqual(cfg.defaults["personaPreset"], "pirate")
+                self.assertEqual(server.default_persona(cfg, "vi"), "Noi nhu hai tac")
+                self.assertEqual(server.default_persona(cfg, "en"), "Talk like a pirate")
+                self.assertEqual(cfg.personas["pirate"]["label"], "Pirate")
+                # a name that is not under "personas" is dropped, not silently used
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump({"defaults": {"personaPreset": "pirat"},
+                               "personas": {"pirate": {"vi": "x"}}}, fh)
+                self.assertNotIn("personaPreset", server.config_from_env().defaults)
         finally:
             for k in keep:
                 os.environ.pop(k, None)

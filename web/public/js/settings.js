@@ -108,6 +108,16 @@ export function createDrawer({ getSettings, update, getImages, setImages, defaul
     });
   }
 
+  // Personalities you added under "personas" in config.json join the list, before "Custom".
+  const builtIn = new Set(["funny", "calm", "teacher", "custom"]);
+  for (const [id, texts] of Object.entries(PRESETS)) {
+    if (builtIn.has(id)) continue;
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = typeof texts.label === "string" && texts.label ? texts.label : id;
+    els.preset.insertBefore(option, els.preset.querySelector('option[value="custom"]'));
+  }
+
   els.preset.addEventListener("change", () => {
     const s = getSettings();
     const lang = getLang();

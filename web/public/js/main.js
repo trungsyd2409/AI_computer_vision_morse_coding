@@ -35,8 +35,8 @@ const isMaster = session.role === "master";
 const ownKeys = isMaster ? null : USER_KEYS;
 
 const defaults = (await fetchDefaults()) || {};
+setPresets(defaults.personas);               // before the defaults: they may name one of your own personalities
 applyServerDefaults(defaults.settings);
-setPresets(defaults.personas);
 const defaultImages = { open: null, closed: null, ...(defaults.images || {}) };
 
 let settings = loadSettings(ownKeys);

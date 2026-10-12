@@ -92,7 +92,8 @@ DEFAULT_PERSONAS = {
         "en": "You are a patient teacher. You explain simply with a short example, praise good effort, and ask one short question to check understanding.",
     },
 }
-PERSONA_IDS = ("funny", "calm", "teacher", "custom")
+PERSONA_IDS = ("funny", "calm", "teacher", "custom")   # the ones the page has built in
+PERSONA_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")      # a name you may add under "personas"
 MAX_PERSONA_TEXT = 800
 
 # Settings that config.json may set as defaults, with their kind.
@@ -303,7 +304,7 @@ def build_chain(entries, default_timeout: float, notes: list) -> list:
     return chain
 
 
-def _clean_defaults(raw) -> dict:
+def _clean_defaults(raw, persona_ids=PERSONA_IDS) -> dict:
     """Keeps only known setting names with the right kind of value. The page clamps numbers."""
     out: dict = {}
     if raw is None:
@@ -321,7 +322,11 @@ def _clean_defaults(raw) -> dict:
         elif kind == "lang":
             ok = value in ("vi", "en")
         elif kind == "preset":
-            ok = value in PERSONA_IDS
+            ok = value == "custom" or value in persona_ids
+            if not ok:
+                names = ", ".join([*persona_ids, "custom"])
+                _warn(f'defaults.personaPreset "{value}" is not defined in "personas" (available: {names})')
+                continue
         elif kind == "mode":
             ok = value in ("designed", "custom")
         elif kind == "texts":
@@ -336,7 +341,10 @@ def _clean_defaults(raw) -> dict:
 
 
 def _clean_personas(raw) -> dict:
-    """Built-in personalities, with any text from config.json laid over them."""
+    """Built-in personalities, with any text from config.json laid over them.
+    A new name (letters, digits, - and _) adds a personality of your own. It needs
+    a "vi" or "en" text (one is enough, it is used for both languages) and may have
+    a "label" for the Settings list."""
     out = {k: dict(v) for k, v in DEFAULT_PERSONAS.items()}
     if raw is None:
         return out
@@ -344,13 +352,24 @@ def _clean_personas(raw) -> dict:
         _warn('"personas" must be an object, ignored')
         return out
     for pid, texts in raw.items():
-        if pid not in DEFAULT_PERSONAS or not isinstance(texts, dict):
-            _warn(f'personas.{pid} is not funny, calm or teacher, ignored')
+        if pid == "custom" or not PERSONA_ID_RE.match(str(pid)) or not isinstance(texts, dict):
+            _warn(f'personas.{pid} needs a name of letters, digits, - or _ (not "custom") and an object, ignored')
             continue
+        found = {}
         for lang in ("vi", "en"):
             text = texts.get(lang)
             if isinstance(text, str) and text.strip():
-                out[pid][lang] = text.strip()[:MAX_PERSONA_TEXT]
+                found[lang] = text.strip()[:MAX_PERSONA_TEXT]
+        if pid not in out:
+            if not found:
+                _warn(f'personas.{pid} has no "vi" or "en" text, ignored')
+                continue
+            out[pid] = {lang: found.get(lang) or next(iter(found.values())) for lang in ("vi", "en")}
+        else:
+            out[pid].update(found)
+        label = texts.get("label")
+        if isinstance(label, str) and label.strip():
+            out[pid]["label"] = label.strip()[:40]
     return out
 
 
@@ -410,8 +429,8 @@ def config_from_env(config_path: Path | None = None) -> Config:
             api_key = ""   # the file lists the models, so the single-key settings do not apply
         if "fallback_replies" in file:
             fallback = _clean_fallback(file["fallback_replies"])
-        defaults = _clean_defaults(file.get("defaults"))
         personas = _clean_personas(file.get("personas"))
+        defaults = _clean_defaults(file.get("defaults"), tuple(personas))
         character = _clean_character(file.get("character"))
 
     try:

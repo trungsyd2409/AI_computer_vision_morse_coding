@@ -4,6 +4,8 @@
 const SETTINGS_KEY = "xeno.settings.v1";
 const IMAGES_KEY = "xeno.images.v1";
 
+import { PRESETS } from "./persona.js";
+
 // Built-in defaults. The server can lay its own on top (config.json, "defaults"),
 // see applyServerDefaults().
 export const DEFAULTS = Object.freeze({
@@ -62,7 +64,11 @@ export function sanitizeSettings(raw) {
     if (key in raw) s[key] = clamp(raw[key], range, BASE[key]);
   }
   s.maxChars = Math.round(s.maxChars);
-  if (["funny", "calm", "teacher", "custom"].includes(raw.personaPreset)) s.personaPreset = raw.personaPreset;
+  // The built-in names, or any personality the server listed in config.json ("personas").
+  if (["funny", "calm", "teacher", "custom"].includes(raw.personaPreset) ||
+      (typeof raw.personaPreset === "string" && Object.hasOwn(PRESETS, raw.personaPreset))) {
+    s.personaPreset = raw.personaPreset;
+  }
   if (raw.personaCustom && typeof raw.personaCustom === "object") {
     for (const l of ["vi", "en"]) {
       if (typeof raw.personaCustom[l] === "string") s.personaCustom[l] = raw.personaCustom[l].slice(0, 800);

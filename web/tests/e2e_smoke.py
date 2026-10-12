@@ -103,8 +103,8 @@ def main():
             # 1. start screen
             page.goto(BASE)
             page.wait_for_selector("#overlay:not([hidden])")
-            for _ in range(40):
-                if page.inner_text("#ov-mode").strip():
+            for _ in range(60):
+                if "api key" in page.inner_text("#ov-mode").lower():
                     break
                 page.wait_for_timeout(100)
             check("api key" in page.inner_text("#ov-mode").lower(), "overlay shows mock mode")
@@ -293,9 +293,9 @@ def main():
                                                       "#btn-img-reset", "#btn-reset-settings")),
                   "user password: persona, AI, camera device, pictures and reset stay master-only")
             page.screenshot(path=str(SHOTS / "12_user_settings.png"))
-            page.evaluate("const e=document.getElementById('set-unit'); e.value=200; e.dispatchEvent(new Event('input',{bubbles:true}))")
+            page.evaluate("const e=document.getElementById('set-unit'); e.value=150; e.dispatchEvent(new Event('input',{bubbles:true}))")
             stored = page.evaluate("JSON.parse(localStorage.getItem('xeno.settings.v1')||'{}').unitMs")
-            check(stored == 200, "user password: the time unit is saved")
+            check(stored == 150, "user password: the time unit is saved")
             page.keyboard.press("Escape")
             page.wait_for_function("document.getElementById('ai-line').textContent.length > 0", timeout=15000)
             page.screenshot(path=str(SHOTS / "11_user_role.png"))
