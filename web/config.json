@@ -58,7 +58,7 @@
   "defaults": {
     "characterMode": "custom",
     "personaPreset": "lostteach",
-    "aiSpeed": 1,
+    "aiSpeed": 3,
     "closeThreshold": 0.4,
     "unitMs": 200,
     "sendDelay": 5
