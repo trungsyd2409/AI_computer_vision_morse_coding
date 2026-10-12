@@ -11,6 +11,14 @@ import { sanitize } from "./sanitize.js";
 import { personaText } from "./persona.js";
 import { getLang, t } from "./i18n.js";
 
+// The AI's time unit never goes below this, so a dot lasts at least two
+// frames at 60 Hz and the eyes can be seen closing at the 3x speed.
+export const MIN_AI_UNIT_MS = 30;
+
+export function aiUnitMs(settings) {
+  return Math.max(MIN_AI_UNIT_MS, settings.unitMs / settings.aiSpeed);
+}
+
 export class ApiClient {
   async status() {
     try {
@@ -39,6 +47,10 @@ export class ApiClient {
     }
     let data = null;
     try { data = await res.json(); } catch { /* not JSON */ }
+    if (res.status === 401) {
+      this.onAuthLost?.();   // the session ended: the page asks for the password again
+      throw new Error(t("sessionExpired"));
+    }
     if (!res.ok) throw new Error(data?.message || t("errNetwork"));
     return data;
   }
@@ -102,7 +114,9 @@ export class Conversation {
 
   // One sample from the camera or keyboard. Returns the composer events.
   onSample(left, right, tSec) {
-    return this.input.feed(left, right, tSec, this.acceptsInput);
+    const events = this.input.feed(left, right, tSec, this.acceptsInput);
+    if (events.length) this.hooks.onEvents?.(events);
+    return events;
   }
 
   // Call every animation frame. `live` is false while no face is visible.
@@ -110,7 +124,7 @@ export class Conversation {
     this.player.tick(nowMs);
     if (!this.acceptsInput || !live) return;
     const t = nowMs / 1000;
-    this.input.tick(t);
+    this.hooks.onEvents?.(this.input.tick(t));
     const text = this.input.composer.text.trim();
     if (!this.input.composer.code && text && !this.input.detector.closed) {
       if (this.input.pause(t) >= this.getSettings().sendDelay) this.send(nowMs);
@@ -157,6 +171,7 @@ export class Conversation {
     this._pendingUser = text;
     this.hooks.onMessage("user", sentenceCase(text));
     composer.clear();
+    this.hooks.onSent?.();
     this._setPhase("sending");
     const token = this._token;
 
@@ -171,6 +186,8 @@ export class Conversation {
       if (token !== this._token) return;
       const reply = sanitize(data.reply, settings.maxChars);
       if (!reply) throw new Error("empty reply");
+      // Models were set up but none answered: say so, so the canned line is not a surprise.
+      if (data.fallback) this.hooks.onNote(t("fallbackNote"));
       this._playAi(performance.now(), reply, true, text);
     } catch (err) {
       if (token !== this._token) return;
@@ -189,8 +206,7 @@ export class Conversation {
     this._reply = text;
     const settings = this.getSettings();
     // The AI uses the same time unit t as the user, scaled by its speed.
-    const unit = settings.unitMs / settings.aiSpeed;
-    this.player.start(text, unit, nowMs);
+    this.player.start(text, aiUnitMs(settings), nowMs);
   }
 
   skipAi() {

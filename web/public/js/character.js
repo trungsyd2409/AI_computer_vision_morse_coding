@@ -1,30 +1,44 @@
 // The face of Xeno Assistant. Two looks:
-//  - designed: an original vector robot with smooth eyelids, a breathing
-//    face and an antenna that lights up while the AI is busy;
+//  - designed: an original bakelite receiver with two brass-rimmed lenses.
+//    Each eyelid slides down over its lens, so a blink reads as a shutter
+//    rather than a squash;
 //  - custom: two pictures supplied by the user (eyes open, eyes closed).
-// Every eye closure means a Morse symbol, so the face never blinks on its
-// own. Idle life comes from breathing and slow pupil drift only.
+// Every eye closure is a Morse symbol, so the face never blinks on its own
+// and has no idle animation. The lamp on top shows whether Xeno is busy.
 
-const SVG_NS = "http://www.w3.org/2000/svg";
+const EYE = (id, cx) => `
+  <g class="eye" data-eye="${id}" transform="translate(${cx} 128)">
+    <circle r="40" fill="#0b0805"/>
+    <g clip-path="url(#lens-clip)">
+      <circle r="35" fill="#efe6d0"/>
+      <circle class="iris" cx="2" cy="3" r="19" fill="#5a4326"/>
+      <circle cx="2" cy="3" r="9" fill="#0b0805"/>
+      <circle cx="-4" cy="-3" r="3.2" fill="#efe6d0" opacity="0.85"/>
+      <g class="lid">
+        <path d="M-40 -92 H40 V36 Q0 52 -40 36 Z" fill="#2b2118"/>
+        <path d="M-40 36 Q0 52 40 36" fill="none" stroke="#120e0a" stroke-width="3" stroke-linecap="round"/>
+      </g>
+    </g>
+    <circle r="38" fill="none" stroke="#b58a3c" stroke-width="5"/>
+  </g>`;
 
 const DESIGNED = `
-<svg class="char" viewBox="0 0 320 260" aria-hidden="true">
-  <line x1="160" y1="30" x2="160" y2="14" stroke="#3a4a44" stroke-width="3" stroke-linecap="round"/>
-  <circle class="antenna" cx="160" cy="11" r="6"/>
-  <g class="face">
-    <rect x="40" y="30" width="240" height="205" rx="56" fill="#17201d" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
-    <rect x="58" y="50" width="204" height="150" rx="40" fill="#0e1412"/>
-    <g class="eye" data-eye="l">
-      <ellipse cx="116" cy="110" rx="23" ry="28" fill="#e9efec"/>
-      <circle class="pupil" cx="120" cy="112" r="10" fill="#0e1412"/>
-    </g>
-    <g class="eye" data-eye="r">
-      <ellipse cx="204" cy="110" rx="23" ry="28" fill="#e9efec"/>
-      <circle class="pupil" cx="208" cy="112" r="10" fill="#0e1412"/>
-    </g>
-    <path d="M140 166 Q160 176 180 166" fill="none" stroke="#3a4a44" stroke-width="3" stroke-linecap="round"/>
-    <rect x="132" y="212" width="56" height="6" rx="3" fill="#0e1412"/>
+<svg class="char" viewBox="0 0 320 290" aria-hidden="true">
+  <defs><clipPath id="lens-clip"><circle r="35"/></clipPath></defs>
+  <line x1="160" y1="38" x2="160" y2="20" stroke="#4a3b2c" stroke-width="4" stroke-linecap="round"/>
+  <circle class="lamp-top" cx="160" cy="14" r="8"/>
+  <rect x="30" y="38" width="260" height="226" rx="44" fill="#2b2118"/>
+  <rect x="30" y="38" width="260" height="226" rx="44" fill="none" stroke="rgba(255,236,200,0.10)" stroke-width="2"/>
+  <rect x="50" y="58" width="220" height="148" rx="30" fill="#120e0a"/>
+  ${EYE("l", 112)}
+  ${EYE("r", 208)}
+  <g fill="#120e0a">
+    <rect x="104" y="222" width="112" height="5" rx="2.5"/>
+    <rect x="104" y="233" width="112" height="5" rx="2.5"/>
+    <rect x="104" y="244" width="112" height="5" rx="2.5"/>
   </g>
+  <circle cx="54" cy="246" r="4.5" fill="#4a3b2c"/>
+  <circle cx="266" cy="246" r="4.5" fill="#4a3b2c"/>
 </svg>`;
 
 export class Character {
@@ -34,7 +48,6 @@ export class Character {
     this.closed = false;
     this.state = "idle";
     this.images = { open: null, closed: null };
-    this._gazeTimer = null;
     this._build();
   }
 
@@ -71,8 +84,14 @@ export class Character {
     }
   }
 
+  // The lids need to finish moving inside one Morse unit, so tie their
+  // speed to it. Fast replies (3x) have units as short as 30 ms.
+  setUnit(unitMs) {
+    const lid = Math.max(18, Math.min(70, Math.round(unitMs * 0.6)));
+    this.stage.style.setProperty("--lid-ms", `${lid}ms`);
+  }
+
   _build() {
-    clearInterval(this._gazeTimer);
     this.stage.replaceChildren();
     if (this.mode === "custom") {
       const wrap = document.createElement("div");
@@ -96,18 +115,6 @@ export class Character {
     this.stage.append(this.svg);
     this.root = this.svg;
     this.eyes = [...this.svg.querySelectorAll(".eye")];
-    this.pupils = [...this.svg.querySelectorAll(".pupil")];
     this.setState(this.state);
-    this._startGaze();
-  }
-
-  _startGaze() {
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
-    const spots = [[0, 0], [-4, -1], [4, 1], [2, -3], [-3, 2], [0, 3]];
-    this._gazeTimer = setInterval(() => {
-      if (this.closed || !this.pupils) return;
-      const [x, y] = spots[Math.floor(Math.random() * spots.length)];
-      this.pupils.forEach((p) => { p.style.transform = `translate(${x}px, ${y}px)`; });
-    }, 3200);
   }
 }

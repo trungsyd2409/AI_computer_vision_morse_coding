@@ -24,9 +24,19 @@ WEB = HERE.parent
 SHOTS = HERE / "shots"
 PORT = 8765
 BASE = f"http://127.0.0.1:{PORT}"
+AUTH_PORT = 8766
+AUTH_BASE = f"http://127.0.0.1:{AUTH_PORT}"
 
 UNIT = 150  # ms, slower than default so test timing jitter does not matter
 SETTINGS = {"unitMs": UNIT, "sendDelay": 2, "sound": False}
+
+# Counts every oscillator the page creates, so the test can tell whether
+# the user's own typing sounds play.
+COUNT_OSC = (
+    "(()=>{window.__osc=0;const C=window.AudioContext||window.webkitAudioContext;if(!C)return;"
+    "const o=C.prototype.createOscillator;"
+    "C.prototype.createOscillator=function(){window.__osc++;return o.apply(this,arguments)}})()"
+)
 
 failures = []
 
@@ -37,13 +47,15 @@ def check(cond, label):
         failures.append(label)
 
 
-def start_server():
-    env = dict(os.environ, XENO_PORT=str(PORT), ANTHROPIC_API_KEY="")
-    proc = subprocess.Popen([sys.executable, str(WEB / "server.py"), "--port", str(PORT)],
+def start_server(port=PORT, **extra_env):
+    env = dict(os.environ, XENO_PORT=str(port), ANTHROPIC_API_KEY="", GEMINI_API_KEY="", GOOGLE_API_KEY="",
+               XENO_MASTER_PASSWORD="", XENO_USER_PASSWORD="")
+    env.update(extra_env)
+    proc = subprocess.Popen([sys.executable, str(WEB / "server.py"), "--port", str(port)],
                             cwd=WEB, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for _ in range(100):
         try:
-            urllib.request.urlopen(BASE + "/api/status", timeout=1).read()
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/session", timeout=1).read()
             return proc
         except Exception:
             time.sleep(0.2)
@@ -70,6 +82,7 @@ def type_dots(page, n):
 def main():
     SHOTS.mkdir(exist_ok=True)
     server = start_server()
+    auth_server = start_server(AUTH_PORT, XENO_MASTER_PASSWORD="master-pass-1", XENO_USER_PASSWORD="user-pass-22")
     problems = []
     try:
         with sync_playwright() as p:
@@ -94,8 +107,7 @@ def main():
                 if page.inner_text("#ov-mode").strip():
                     break
                 page.wait_for_timeout(100)
-            check("giả lập" in page.inner_text("#ov-mode").lower() or "mock" in page.inner_text("#ov-mode").lower(),
-                  "overlay shows mock mode")
+            check("api key" in page.inner_text("#ov-mode").lower(), "overlay shows mock mode")
             page.screenshot(path=str(SHOTS / "1_overlay.png"))
 
             # 2. camera path under the real CSP: MediaPipe + model + fake camera.
@@ -127,6 +139,7 @@ def main():
             ctx.add_init_script(
                 "try{ if(!localStorage.getItem('xeno.settings.v1')) localStorage.setItem('xeno.settings.v1', %s) }catch(e){}"
                 % json.dumps(json.dumps(SETTINGS)))
+            ctx.add_init_script(COUNT_OSC)
             page = ctx.new_page()
             page.on("pageerror", lambda e: problems.append(str(e)))
             page.on("request", lambda r: requests.append(r) if r.url.endswith("/api/chat") else None)
@@ -138,8 +151,8 @@ def main():
             page.wait_for_function("document.getElementById('ai-line').textContent.length > 0", timeout=15000)
             page.screenshot(path=str(SHOTS / "3_ai_greeting.png"))
             page.click("#btn-skip")
-            page.wait_for_function("document.querySelectorAll('#chat-log .msg.ai').length === 1")
-            check(page.inner_text("#chat-log .msg.ai .bubble") == "Xin chao toi la xeno", "greeting lands in the chat")
+            page.wait_for_function("document.querySelectorAll('#chat-log .msg.ai:not(#ai-live)').length === 1")
+            check(page.inner_text("#chat-log .msg.ai:not(#ai-live) .text") == "Xin chao toi la xeno", "greeting lands in the chat")
             page.wait_for_function("document.getElementById('user-status').textContent.length > 0")
 
             # type HI: H = 4 dots, I = 2 dots
@@ -149,16 +162,19 @@ def main():
             type_dots(page, 2)
             page.wait_for_timeout(UNIT * 3 + 200)
             check(page.inner_text("#user-line").lower() == "hi", "text is 'hi'")
+            check(page.evaluate("window.__osc") > 0, "your own typing makes sound (tone and letter cue)")
+            check(page.locator("#tape-svg path.mark").count() == 6, "the tape prints 6 marks for H and I")
+            check(page.locator("#tape-svg text.tape-letter").count() == 2, "the tape labels both letters")
             page.wait_for_timeout(300)
             check(page.is_visible("#ring"), "countdown ring is visible while waiting")
             page.screenshot(path=str(SHOTS / "4_countdown.png"))
 
             page.wait_for_function("document.querySelectorAll('#chat-log .msg.user').length === 1", timeout=8000)
-            check(page.inner_text("#chat-log .msg.user .bubble") == "Hi", "message auto-sent after the pause")
+            check(page.inner_text("#chat-log .msg.user .text") == "Hi", "message auto-sent after the pause")
             page.wait_for_function("document.getElementById('ai-line').textContent.length > 0", timeout=15000)
             page.screenshot(path=str(SHOTS / "5_ai_replying.png"))
             page.click("#btn-skip")
-            page.wait_for_function("document.querySelectorAll('#chat-log .msg.ai').length === 2", timeout=8000)
+            page.wait_for_function("document.querySelectorAll('#chat-log .msg.ai:not(#ai-live)').length === 2", timeout=8000)
             check(len(requests) == 1 and json.loads(requests[0].post_data)["history"] == [], "first request has no history")
 
             # second message must carry exactly one remembered turn
@@ -172,7 +188,7 @@ def main():
             check("vui tính" in body["persona"].lower(), "default persona is the funny one")
             page.wait_for_function("document.getElementById('btn-skip') && !document.getElementById('btn-skip').hidden", timeout=8000)
             page.click("#btn-skip")
-            page.wait_for_function("document.querySelectorAll('#chat-log .msg.ai').length === 3", timeout=8000)
+            page.wait_for_function("document.querySelectorAll('#chat-log .msg.ai:not(#ai-live)').length === 3", timeout=8000)
 
             # backspace removes the last typed character
             type_dots(page, 1)
@@ -186,6 +202,7 @@ def main():
             # 4. settings drawer and language switch
             page.keyboard.press("x")
             page.wait_for_selector("#drawer:not([hidden])")
+            page.wait_for_timeout(400)
             page.screenshot(path=str(SHOTS / "6_settings.png"))
             page.click("[data-lang='en']")
             check(page.inner_text("#dr-title") == "Settings", "language switch to English")
@@ -193,8 +210,19 @@ def main():
                   "persona text follows the language")
             page.fill("#set-persona", "You are a pirate.")
             check(page.input_value("#set-preset") == "custom", "editing the persona switches to Custom")
+            check(page.get_attribute("#set-aispeed", "max") == "3", "AI speed slider goes up to 3x")
+            check(page.evaluate("import('/js/store.js').then(m => m.sanitizeSettings({aiSpeed: 9}).aiSpeed)") == 3,
+                  "AI speed above 3x is clamped")
+            check(page.evaluate("import('/js/chat.js').then(m => m.aiUnitMs({unitMs: 60, aiSpeed: 3}))") == 30,
+                  "Xeno's time unit never goes under 30 ms")
+            page.uncheck("#set-usersound")
+            osc = page.evaluate("window.__osc")
             page.keyboard.press("Escape")
-            check(page.is_hidden("#drawer"), "Escape closes the drawer")
+            page.locator("#drawer").wait_for(state="hidden")
+            check(True, "Escape closes the drawer")
+            type_dots(page, 1)
+            page.wait_for_timeout(UNIT * 3 + 200)
+            check(page.evaluate("window.__osc") == osc, "no sound from you once that option is off")
             page.screenshot(path=str(SHOTS / "7_english.png"))
 
             # custom character images: two small PNGs, kept after a reload
@@ -218,6 +246,7 @@ def main():
             page.click("[data-char='custom']")
             check(page.locator("#character img").count() == 2, "custom images replace the designed face")
             page.keyboard.press("Escape")
+            page.locator("#drawer").wait_for(state="hidden")
             page.reload()
             page.click("#btn-start-key")
             page.wait_for_function("document.getElementById('overlay').hidden")
@@ -225,15 +254,57 @@ def main():
             page.screenshot(path=str(SHOTS / "9_custom_character.png"))
             page.click("#btn-skip")
 
-            # 5. narrow screen
+            # 5. tablet and narrow screens
+            page.set_viewport_size({"width": 900, "height": 1000})
+            page.wait_for_timeout(300)
+            page.screenshot(path=str(SHOTS / "8_tablet.png"), full_page=True)
             page.set_viewport_size({"width": 390, "height": 844})
             page.wait_for_timeout(300)
             overflow = page.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth")
             check(not overflow, "no horizontal scroll at 390 px")
             page.screenshot(path=str(SHOTS / "8_mobile.png"), full_page=True)
 
+            # 6. passwords: the page is locked, the user password cannot open Settings
+            ctx.close()
+            ctx = browser.new_context(viewport={"width": 1440, "height": 900}, bypass_csp=True)
+            page = ctx.new_page()
+            page.on("pageerror", lambda e: problems.append(str(e)))
+            page.goto(AUTH_BASE)
+            page.locator("#login").wait_for(state="visible")
+            check(page.is_hidden("#overlay"), "locked: the start sheet is hidden behind the password sheet")
+            page.screenshot(path=str(SHOTS / "10_login.png"))
+            page.fill("#login-password", "wrong")
+            page.click("#btn-login")
+            page.wait_for_function("document.getElementById('login-error').textContent.length > 0")
+            check(page.is_visible("#login"), "wrong password keeps the sheet open")
+            page.fill("#login-password", "user-pass-22")
+            page.click("#btn-login")
+            page.locator("#overlay").wait_for(state="visible")
+            check(page.is_hidden("#btn-settings"), "user password: no Settings button")
+            check(page.is_visible("#btn-logout"), "sign-out button is shown")
+            page.click("#btn-start-key")
+            page.locator("#overlay").wait_for(state="hidden")
+            page.keyboard.press("x")
+            page.wait_for_timeout(400)
+            check(page.is_hidden("#drawer"), "user password: the X shortcut does not open Settings")
+            page.wait_for_function("document.getElementById('ai-line').textContent.length > 0", timeout=15000)
+            page.screenshot(path=str(SHOTS / "11_user_role.png"))
+            page.click("#btn-logout")
+            page.locator("#login").wait_for(state="visible")
+            check(True, "sign out returns to the password sheet")
+            page.fill("#login-password", "master-pass-1")
+            page.click("#btn-login")
+            page.locator("#overlay").wait_for(state="visible")
+            check(page.is_visible("#btn-settings"), "master password: Settings button is there")
+            page.click("#btn-start-key")
+            page.locator("#overlay").wait_for(state="hidden")
+            page.keyboard.press("x")
+            page.locator("#drawer.in").wait_for(state="visible")
+            check(True, "master password opens Settings")
+
             browser.close()
     finally:
+        auth_server.terminate()
         server.terminate()
 
     # MediaPipe prints an INFO line through console.error, which is not an error.

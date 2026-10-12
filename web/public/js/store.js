@@ -4,6 +4,8 @@
 const SETTINGS_KEY = "xeno.settings.v1";
 const IMAGES_KEY = "xeno.images.v1";
 
+// Built-in defaults. The server can lay its own on top (config.json, "defaults"),
+// see applyServerDefaults().
 export const DEFAULTS = Object.freeze({
   lang: "vi",
   // camera
@@ -14,7 +16,7 @@ export const DEFAULTS = Object.freeze({
   // typing
   unitMs: 100,
   sendDelay: 3,
-  userBeep: false,
+  userSound: true,
   // AI
   personaPreset: "funny",
   personaCustom: { vi: "", en: "" },
@@ -31,10 +33,16 @@ const RANGES = {
   closeThreshold: [0.25, 0.7],
   unitMs: [60, 300],
   sendDelay: [1.5, 8],
-  aiSpeed: [0.5, 2],
+  aiSpeed: [0.5, 3],
   maxChars: [20, 120],
   volume: [0, 1],
 };
+
+// What a fresh visitor starts with: DEFAULTS plus whatever the server sends.
+let BASE = { ...DEFAULTS, personaCustom: { ...DEFAULTS.personaCustom } };
+
+// Settings a visitor with the user password may still change (the header buttons).
+export const USER_KEYS = ["lang", "sound", "userSound", "volume"];
 
 function clamp(value, [lo, hi], fallback) {
   const n = Number(value);
@@ -42,15 +50,15 @@ function clamp(value, [lo, hi], fallback) {
 }
 
 export function sanitizeSettings(raw) {
-  const s = { ...DEFAULTS, personaCustom: { ...DEFAULTS.personaCustom } };
+  const s = { ...BASE, personaCustom: { ...BASE.personaCustom } };
   if (!raw || typeof raw !== "object") return s;
   if (raw.lang === "vi" || raw.lang === "en") s.lang = raw.lang;
   if (typeof raw.deviceId === "string") s.deviceId = raw.deviceId.slice(0, 200);
-  for (const key of ["mirror", "swapEyes", "userBeep", "sound"]) {
+  for (const key of ["mirror", "swapEyes", "userSound", "sound"]) {
     if (typeof raw[key] === "boolean") s[key] = raw[key];
   }
   for (const [key, range] of Object.entries(RANGES)) {
-    if (key in raw) s[key] = clamp(raw[key], range, DEFAULTS[key]);
+    if (key in raw) s[key] = clamp(raw[key], range, BASE[key]);
   }
   s.maxChars = Math.round(s.maxChars);
   if (["funny", "calm", "teacher", "custom"].includes(raw.personaPreset)) s.personaPreset = raw.personaPreset;
@@ -63,18 +71,55 @@ export function sanitizeSettings(raw) {
   return s;
 }
 
-export function loadSettings() {
+// Lays the server's defaults over the built-in ones. Call once, before loadSettings().
+export function applyServerDefaults(serverSettings) {
+  BASE = { ...DEFAULTS, personaCustom: { ...DEFAULTS.personaCustom } };
+  BASE = sanitizeSettings(serverSettings && typeof serverSettings === "object" ? serverSettings : null);
+}
+
+export function baseSettings() {
+  return { ...BASE, personaCustom: { ...BASE.personaCustom } };
+}
+
+function sameValue(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function readStored() {
   try {
     const text = localStorage.getItem(SETTINGS_KEY);
-    return sanitizeSettings(text ? JSON.parse(text) : null);
+    const raw = text ? JSON.parse(text) : null;
+    return raw && typeof raw === "object" ? raw : null;
   } catch {
-    return sanitizeSettings(null);
+    return null;
   }
 }
 
-export function saveSettings(settings) {
+// Only what differs from the defaults is stored, so a later change to the
+// defaults reaches everyone who never touched that setting.
+// `onlyKeys` limits the visitor to those settings: the rest of what is stored
+// (for example the master's choices on a shared browser) is left alone and ignored.
+export function loadSettings(onlyKeys = null) {
+  let raw = readStored();
+  if (raw && onlyKeys) raw = Object.fromEntries(Object.entries(raw).filter(([k]) => onlyKeys.includes(k)));
+  return sanitizeSettings(raw);
+}
+
+export function saveSettings(settings, onlyKeys = null) {
+  const diff = {};
+  for (const key of Object.keys(BASE)) {
+    if (!sameValue(settings[key], BASE[key])) diff[key] = settings[key];
+  }
+  let out = diff;
+  if (onlyKeys) {
+    out = { ...(readStored() || {}) };
+    for (const key of onlyKeys) {
+      if (key in diff) out[key] = diff[key];
+      else delete out[key];
+    }
+  }
   try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(out));
   } catch { /* storage unavailable, keep working in memory */ }
 }
 

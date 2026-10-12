@@ -1,25 +1,51 @@
 // Wires everything together: start screen, camera, the frame loop, keyboard
 // shortcuts and the settings drawer.
 
-import { decode } from "./morse.js";
+import { EventKind, MORSE_TABLE, decode } from "./morse.js";
 import { Sound } from "./audio.js";
 import { Character } from "./character.js";
-import { Chart, Chips, Ring, Strip } from "./hud.js";
+import { Chart, Chips, Ring, Tape } from "./hud.js";
 import { MorseInput } from "./input.js";
-import { ApiClient, Conversation, sentenceCase } from "./chat.js";
+import { ApiClient, Conversation, aiUnitMs, sentenceCase } from "./chat.js";
 import { applyI18n, getLang, onLang, setLang, t } from "./i18n.js";
 import { createDrawer } from "./settings.js";
+import { setPresets } from "./persona.js";
+import { fetchDefaults, gate, logout } from "./auth.js";
 import {
-  clearSettings, loadImages, loadSettings, sanitizeSettings, saveImages, saveSettings,
+  USER_KEYS, applyServerDefaults, baseSettings, clearSettings, loadImages, loadSettings,
+  sanitizeSettings, saveImages, saveSettings,
 } from "./store.js";
 import { Tracker } from "./tracker.js";
 
 const $ = (id) => document.getElementById(id);
 
+// The tape only needs the most recent letters; older ones are off screen.
+const TAPE_LETTERS = 40;
+
 // -- state --------------------------------------------------------------------
 
-let settings = loadSettings();
-let images = loadImages();
+// -- sign-in and defaults ---------------------------------------------------------
+
+// The language for the password sheet comes from what this browser stored.
+setLang(loadSettings().lang);
+const session = await gate();
+const isMaster = session.role === "master";
+// Visitors with the user password may use the app but not open Settings, so
+// only the header buttons (language, sound) can change and be remembered.
+const ownKeys = isMaster ? null : USER_KEYS;
+
+const defaults = (await fetchDefaults()) || {};
+applyServerDefaults(defaults.settings);
+setPresets(defaults.personas);
+const defaultImages = { open: null, closed: null, ...(defaults.images || {}) };
+
+let settings = loadSettings(ownKeys);
+let storedImages = isMaster ? loadImages() : { open: null, closed: null };
+const pickedImages = () => ({
+  open: storedImages.open || defaultImages.open,
+  closed: storedImages.closed || defaultImages.closed,
+});
+let images = pickedImages();
 let mode = null;            // null | "camera" | "keyboard"
 let faceOk = false;
 let landmarks = null;
@@ -32,11 +58,9 @@ let lastFpsText = 0;
 setLang(settings.lang);
 
 const sound = new Sound();
-sound.enabled = settings.sound;
-sound.volume = settings.volume;
-
 const input = new MorseInput(settings);
 const api = new ApiClient();
+api.onAuthLost = () => setTimeout(() => location.reload(), 1500);
 
 const video = $("cam");
 const camStage = $("cam-stage");
@@ -44,8 +68,7 @@ const character = new Character($("character"));
 character.setMode(settings.characterMode, images);
 
 const chart = new Chart($("chart-grid"), $("chart-note"));
-const userStrip = new Strip($("user-strip"), $("user-strip-live"));
-const aiStrip = new Strip($("ai-strip"), $("ai-strip-live"));
+const tape = new Tape($("tape-view"), $("tape-svg"));
 const ring = new Ring($("ring"), $("ring-fg"), $("ring-text"));
 const chips = new Chips(camStage, video, $("chip-l"), $("chip-r"));
 
@@ -58,6 +81,15 @@ const conv = new Conversation({
     onMessage: addMessage,
     onNote: addNote,
     onPhase: () => {},
+    // Short cues for the user's own typing.
+    onEvents(events) {
+      for (const e of events) {
+        if (!e) continue;
+        if (e.kind === EventKind.LETTER) sound.cue("letter");
+        else if (e.kind === EventKind.INVALID) sound.cue("invalid");
+      }
+    },
+    onSent: () => sound.cue("send"),
   },
 });
 
@@ -87,6 +119,17 @@ const tracker = new Tracker({
   },
 });
 
+function syncAudio() {
+  sound.channel.ai = settings.sound;
+  sound.channel.user = settings.userSound;
+  sound.volume = settings.volume;
+  if (!settings.sound) sound.stop("ai");
+  if (!settings.userSound) sound.stop("user");
+  $("btn-mute").setAttribute("aria-pressed", String(!settings.sound && !settings.userSound));
+}
+syncAudio();
+character.setUnit(aiUnitMs(settings));
+
 // -- small DOM helpers -------------------------------------------------------------
 
 function toast(message, isError = false) {
@@ -98,44 +141,53 @@ function toast(message, isError = false) {
   toastTimer = setTimeout(() => { el.hidden = true; }, 3500);
 }
 
-function addMessage(who, text) {
+function scrollLog() {
   const log = $("chat-log");
-  const wrap = document.createElement("div");
-  wrap.className = `msg ${who}`;
+  log.scrollTop = log.scrollHeight;
+}
+
+// Finished lines go above the row that shows the reply being typed.
+function addRow(row) {
+  $("chat-log").insertBefore(row, $("ai-live"));
+  scrollLog();
+}
+
+function addMessage(who, text) {
+  const row = document.createElement("div");
+  row.className = `msg ${who}`;
   const label = document.createElement("span");
   label.className = "who";
   label.dataset.who = who;
   label.textContent = t(`who_${who}`);
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.textContent = text;
-  wrap.append(label, bubble);
-  log.append(wrap);
-  log.scrollTop = log.scrollHeight;
+  const body = document.createElement("p");
+  body.className = "text";
+  body.textContent = text;
+  row.append(label, body);
+  addRow(row);
 }
 
 function addNote(text) {
-  const log = $("chat-log");
-  const wrap = document.createElement("div");
-  wrap.className = "msg note";
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.textContent = text;
-  wrap.append(bubble);
-  log.append(wrap);
-  log.scrollTop = log.scrollHeight;
+  const row = document.createElement("div");
+  row.className = "msg note";
+  const body = document.createElement("p");
+  body.className = "text";
+  body.textContent = text;
+  row.append(body);
+  addRow(row);
 }
 
 function setText(el, value) {
   if (el.textContent !== value) el.textContent = value;
 }
 
-// The line under a face: finished text plus the letter being typed.
+// A line of text plus the letter being typed, shown in the lamp colour.
 function renderLine(el, text, pendingCode) {
   const key = `${text}|${pendingCode}`;
   if (el._key === key) return;
   el._key = key;
-  const nodes = [document.createTextNode(sentenceCase(text))];
+  const nodes = [];
+  const body = sentenceCase(text);
+  if (body) nodes.push(document.createTextNode(body));
   if (pendingCode) {
     const span = document.createElement("span");
     span.className = "pending";
@@ -145,8 +197,28 @@ function renderLine(el, text, pendingCode) {
   el.replaceChildren(...nodes);
 }
 
-function setStatusDot(dot, state) {
-  dot.className = `dot ${state}`.trim();
+function setLamp(dot, state) {
+  dot.className = `lamp ${state}`.trim();
+}
+
+// Text already typed, as tape groups: one per letter, one per word gap.
+function tapeGroups(text) {
+  const groups = [];
+  for (const ch of text.slice(-TAPE_LETTERS)) {
+    if (ch === " ") {
+      if (groups.length) groups.push({ space: true });
+      continue;
+    }
+    const up = ch.toUpperCase();
+    if (MORSE_TABLE[up]) groups.push({ ch: up, code: MORSE_TABLE[up] });
+  }
+  return groups;
+}
+
+function renderLangButton() {
+  const lang = getLang();
+  $("btn-lang").children[0].classList.toggle("on", lang === "vi");
+  $("btn-lang").children[1].classList.toggle("on", lang === "en");
 }
 
 // -- frame loop ----------------------------------------------------------------------
@@ -171,26 +243,47 @@ function loop() {
 function render(nowMs, live) {
   const det = input.detector;
   const composer = input.composer;
-  const userTurn = conv.phase === "user";
-  const started = conv.phase !== "idle";
+  const phase = conv.phase;
+  const userTurn = phase === "user";
+  const aiTurn = phase === "ai";
+  const started = phase !== "idle";
+  const ai = conv.ai;
 
-  // user side
-  const liveSym = userTurn && det.closed && !det.dashFired ? "." : "";
-  userStrip.set(userTurn ? composer.code : "", liveSym);
+  // the tape follows whoever is typing
+  if (aiTurn) {
+    tape.set(tapeGroups(ai.text), ai.code, ai.live);
+  } else if (userTurn) {
+    const liveSym = det.closed ? (det.dashFired ? "-" : ".") : "";
+    tape.set(tapeGroups(composer.text), composer.code, liveSym);
+  } else {
+    tape.set([], "", "");
+  }
+  const tapeEmpty = aiTurn
+    ? !(ai.text || ai.code || ai.live)
+    : userTurn ? !(composer.text || composer.code || det.closed) : true;
+  const idle = $("tape-idle");
+  idle.hidden = !tapeEmpty;
+  if (tapeEmpty) {
+    setText(idle, t(phase === "sending" ? "tapeIdleSend" : aiTurn ? "tapeIdleAi" : "tapeIdleUser"));
+  }
+  setText($("tape-who"), t(aiTurn || phase === "sending" ? "who_ai" : "who_user"));
+
+  // what the user has typed
   renderLine($("user-line"), userTurn ? composer.text : "", userTurn ? composer.code : "");
   $("user-caret").hidden = !(userTurn && !conv.paused);
+  $("user-placeholder").hidden = !userTurn;
 
-  // AI side
-  const ai = conv.ai;
-  aiStrip.set(ai.code, ai.live);
-  renderLine($("ai-line"), ai.text, "");
-  $("ai-caret").hidden = conv.phase !== "ai";
-  $("btn-skip").hidden = conv.phase !== "ai";
+  // what Xeno is typing
+  $("ai-live").hidden = !aiTurn;
+  renderLine($("ai-line"), aiTurn ? ai.text : "", "");
+  $("ai-caret").hidden = !aiTurn;
+  $("btn-skip").hidden = !aiTurn;
+  if (aiTurn) scrollLog();
   character.setClosed(ai.closed);
-  character.setState(conv.phase === "sending" ? "thinking" : conv.phase === "ai" ? "talking" : "idle");
+  character.setState(phase === "sending" ? "thinking" : aiTurn ? "talking" : "idle");
 
   // chart follows whoever is typing
-  chart.update(conv.phase === "ai" ? ai.code : userTurn ? composer.code : "");
+  chart.update(aiTurn ? ai.code : userTurn ? composer.code : "");
 
   // countdown ring and send button
   const cd = conv.countdown(nowMs);
@@ -198,7 +291,7 @@ function render(nowMs, live) {
   else ring.hide();
   $("btn-send").disabled = !conv.canSend();
 
-  // eye chips
+  // eye gauges
   if (mode === "camera" && faceOk && landmarks) {
     chips.update(landmarks, {
       leftValue: det.left.value,
@@ -214,16 +307,16 @@ function render(nowMs, live) {
   const keys = conv.statusKeys(mode === "keyboard" || faceOk);
   setText($("user-status"), t(keys.user));
   setText($("ai-status"), t(keys.ai));
-  setStatusDot($("user-dot"), !started ? "" : keys.user === "stNoFace" ? "bad" : keys.user === "stYourTurn" || keys.user === "stTyping" ? "on" : "");
-  setStatusDot($("ai-dot"), keys.ai === "stAiTyping" ? "on" : keys.ai === "stThinking" ? "wait" : "");
+  setLamp($("user-dot"), !started ? "" : keys.user === "stNoFace" ? "bad" : keys.user === "stYourTurn" || keys.user === "stTyping" ? "on" : "");
+  setLamp($("ai-dot"), keys.ai === "stAiTyping" ? "on" : keys.ai === "stThinking" ? "wait" : "");
 
   const hint = $("cam-hint");
   const showHint = mode === "camera" && started && !faceOk;
   hint.hidden = !showHint;
   if (showHint) setText(hint, t("hintNoFace"));
 
-  // the user's own beep follows the eyes
-  if (settings.userBeep && conv.acceptsInput && det.closed) sound.start("user");
+  // the user's own tone follows the eyes
+  if (conv.acceptsInput && det.closed) sound.start("user");
   else sound.stop("user");
 }
 
@@ -299,19 +392,18 @@ function startKeyboard() {
 // -- settings ------------------------------------------------------------------------------
 
 function update(patch) {
+  if (!isMaster) patch = Object.fromEntries(Object.entries(patch).filter(([k]) => USER_KEYS.includes(k)));
   const prev = settings;
   settings = sanitizeSettings({ ...settings, ...patch });
-  saveSettings(settings);
+  saveSettings(settings, ownKeys);
   applySettings(prev);
 }
 
 function applySettings(prev) {
   input.apply(settings);
-  sound.enabled = settings.sound;
-  sound.volume = settings.volume;
-  if (!settings.sound) sound.stopAll();
+  syncAudio();
+  character.setUnit(aiUnitMs(settings));
   video.classList.toggle("mirror", settings.mirror);
-  $("btn-mute").setAttribute("aria-pressed", String(!settings.sound));
   if (settings.lang !== prev.lang) {
     setLang(settings.lang);
   }
@@ -328,18 +420,21 @@ const drawer = createDrawer({
   update,
   getImages: () => images,
   setImages(next) {
-    images = next;
-    const ok = saveImages(next);
+    // Only pictures the visitor picked are stored. The defaults come from the server.
+    const own = (v) => (typeof v === "string" && v.startsWith("data:image/") ? v : null);
+    storedImages = { open: own(next.open), closed: own(next.closed) };
+    const ok = saveImages(storedImages);
+    images = pickedImages();
     character.setMode(settings.characterMode, images);
     return ok;
   },
+  defaultCharacterMode: () => (defaultImages.open && defaultImages.closed ? baseSettings().characterMode : "designed"),
   listCameras: () => Tracker.listCameras(),
   onReset() {
     clearSettings();
     const prev = settings;
     settings = sanitizeSettings(null);
     applySettings(prev);
-    saveSettings(settings);
   },
   toast,
 });
@@ -350,15 +445,11 @@ onLang(() => {
   showModeLine();
   refreshPauseLabel();
   drawer.sync();
-  $("btn-lang").textContent = getLang().toUpperCase();
-  redrawLines();
-});
-
-function redrawLines() {
-  // force the lines and statuses to redraw in the new language
+  renderLangButton();
+  // force the lines to redraw in the new language
   $("user-line")._key = null;
   $("ai-line")._key = null;
-}
+});
 
 function refreshPauseLabel() {
   const btn = $("btn-pause");
@@ -375,13 +466,16 @@ function togglePause() {
   toast(t(paused ? "paused" : "resumed"));
 }
 
+// M mutes everything, or turns both channels back on.
 function toggleMute() {
-  update({ sound: !settings.sound });
+  const anyOn = settings.sound || settings.userSound;
+  update({ sound: !anyOn, userSound: !anyOn });
   drawer.sync();
-  toast(t(settings.sound ? "unmuted" : "muted"));
+  toast(t(anyOn ? "muted" : "unmuted"));
 }
 
 function toggleDrawer() {
+  if (!isMaster) return;   // Settings belong to the master password
   if (drawer.isOpen) drawer.close();
   else drawer.open();
 }
@@ -450,6 +544,7 @@ document.addEventListener("click", (e) => {
 $("btn-start-cam").addEventListener("click", startCamera);
 $("btn-start-key").addEventListener("click", startKeyboard);
 $("btn-settings").addEventListener("click", toggleDrawer);
+$("btn-logout").addEventListener("click", async () => { await logout(); location.reload(); });
 $("btn-close-settings").addEventListener("click", () => drawer.close());
 $("btn-pause").addEventListener("click", togglePause);
 $("btn-mute").addEventListener("click", toggleMute);
@@ -457,7 +552,7 @@ $("btn-send").addEventListener("click", () => conv.send(performance.now()));
 $("btn-skip").addEventListener("click", () => conv.skipAi());
 $("btn-lang").addEventListener("click", () => update({ lang: getLang() === "vi" ? "en" : "vi" }));
 $("btn-clear-chat").addEventListener("click", () => {
-  $("chat-log").replaceChildren();
+  document.querySelectorAll("#chat-log .msg:not(#ai-live)").forEach((el) => el.remove());
   conv.clearChat(performance.now());
   toast(t("cleared"));
 });
@@ -472,9 +567,11 @@ function setChartSet(name) {
 
 // -- boot ---------------------------------------------------------------------------------------------------
 
+$("btn-settings").hidden = !isMaster;
+$("btn-logout").hidden = !session.auth;
+$("overlay").hidden = false;
 applyI18n(document);
-$("btn-lang").textContent = getLang().toUpperCase();
-$("btn-mute").setAttribute("aria-pressed", String(!settings.sound));
+renderLangButton();
 refreshPauseLabel();
 if (!navigator.mediaDevices?.getUserMedia) $("btn-start-cam").disabled = true;
 

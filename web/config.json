@@ -1,0 +1,79 @@
+{
+  "_help": [
+    "models: the server asks them from top to bottom and moves to the next one when a call fails.",
+    "Each entry needs provider (gemini or anthropic) and model. The key is read from .env:",
+    "GEMINI_API_KEY or ANTHROPIC_API_KEY, or any other variable you name in key_env.",
+    "Entries with no key are skipped. Optional per entry: key_env, url, timeout_seconds.",
+    "When no model answers, Xeno picks one line from fallback_replies.",
+    "defaults: starting values of Settings for every visitor (a person's own changes are kept in their browser).",
+    "Allowed keys: lang, mirror, swapEyes, closeThreshold, unitMs, sendDelay, userSound, personaPreset,",
+    "personaCustom, aiSpeed, maxChars, sound, volume, characterMode.",
+    "personaPreset is funny, calm, teacher or custom. personaCustom holds the vi and en text used by custom.",
+    "personas: the text of the three ready-made personalities, one per language (vi, en).",
+    "character: the two default pictures of Xeno. Put the files in public/assets/xeno/ and name them here.",
+    "Passwords are NOT set here. Put XENO_MASTER_PASSWORD and XENO_USER_PASSWORD in .env or in the host's secrets.",
+    "Keep keys and passwords out of this file. Reply text should use only letters, digits and basic punctuation."
+  ],
+  "models": [
+    {
+      "provider": "gemini",
+      "model": "gemini-3.5-flash-lite"
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-3.8-flash"
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-haiku-5-5"
+    }
+  ],
+  "timeout_seconds": 8,
+  "total_timeout_seconds": 24,
+  "cooldown_seconds": 60,
+  "defaults": {
+    "characterMode": "custom",
+    "personaPreset": "funny",
+    "aiSpeed": 1
+  },
+  "personas": {
+    "funny": {
+      "vi": "Bạn rất vui tính và hài hước. Bạn thích đùa nhẹ, so sánh ngộ nghĩnh và trêu bạn bè một cách thân thiện, nhưng luôn tử tế. Bạn là một con robot vui vẻ, cho rằng chớp mắt là cách nói chuyện tuyệt nhất.",
+      "en": "You are playful and funny. You like light jokes, silly comparisons and friendly teasing, and you always stay kind. You are a cheerful robot who thinks blinking is the best way to talk."
+    },
+    "calm": {
+      "vi": "Bạn điềm đạm, ấm áp và nói ngắn gọn. Bạn lắng nghe trước, trả lời nhẹ nhàng và không dùng lời đùa ồn ào.",
+      "en": "You are calm, warm and brief. You listen first, answer gently and avoid loud jokes."
+    },
+    "teacher": {
+      "vi": "Bạn là một thầy giáo kiên nhẫn. Bạn giải thích đơn giản bằng ví dụ ngắn, khen khi người học làm tốt và hỏi lại một câu để kiểm tra họ có hiểu không.",
+      "en": "You are a patient teacher. You explain simply with a short example, praise good effort, and ask one short question to check understanding."
+    }
+  },
+  "character": {
+    "open": "assets/xeno/open.png",
+    "closed": "assets/xeno/closed.png"
+  },
+  "fallback_replies": {
+    "vi": [
+      "Xin chao! Toi la Xeno, chop mat la toi hieu luon.",
+      "Nghe hay day! Ke them cho toi nghe di.",
+      "Hmm, toi dang nghi... xong roi, toi dong y!",
+      "Ban go Morse nhanh hon ca con ga mai cua toi.",
+      "Cho toi chop mat mot cai de suy nghi nhe.",
+      "Hay do! Ban co muon thu cau kho hon khong?",
+      "Luc nay toi chua noi chuyen duoc voi AI, nen chi biet noi may cau nay thoi.",
+      "Duoc chu! Toi se ghi nho dieu do (trong mot luot)."
+    ],
+    "en": [
+      "Hello! I am Xeno. One blink and I get it.",
+      "That sounds great! Tell me more.",
+      "Hmm, thinking... done, I agree!",
+      "You type Morse faster than my toaster boots.",
+      "Let me blink once to think about that.",
+      "Nice one! Want to try a harder question?",
+      "I am running without an AI model right now, so I only know a few lines.",
+      "Sure thing! I will remember that for one turn."
+    ]
+  }
+}

@@ -19,12 +19,12 @@ async function readImage(file) {
   return canvas.toDataURL("image/webp", 0.9);
 }
 
-export function createDrawer({ getSettings, update, getImages, setImages, listCameras, onReset, toast }) {
+export function createDrawer({ getSettings, update, getImages, setImages, defaultCharacterMode, listCameras, onReset, toast }) {
   const drawer = $("drawer");
   const els = {
     device: $("set-device"), mirror: $("set-mirror"), swap: $("set-swap"),
     threshold: $("set-threshold"), unit: $("set-unit"), delay: $("set-delay"),
-    userBeep: $("set-userbeep"), preset: $("set-preset"), persona: $("set-persona"),
+    userSound: $("set-usersound"), preset: $("set-preset"), persona: $("set-persona"),
     aiSpeed: $("set-aispeed"), maxChars: $("set-maxchars"),
     sound: $("set-sound"), volume: $("set-volume"),
   };
@@ -76,7 +76,7 @@ export function createDrawer({ getSettings, update, getImages, setImages, listCa
     els.threshold.value = s.closeThreshold;
     els.unit.value = s.unitMs;
     els.delay.value = s.sendDelay;
-    els.userBeep.checked = s.userBeep;
+    els.userSound.checked = s.userSound;
     els.preset.value = s.personaPreset;
     els.persona.value = personaText(s, lang);
     els.aiSpeed.value = s.aiSpeed;
@@ -93,7 +93,7 @@ export function createDrawer({ getSettings, update, getImages, setImages, listCa
 
   els.mirror.addEventListener("change", () => update({ mirror: els.mirror.checked }));
   els.swap.addEventListener("change", () => update({ swapEyes: els.swap.checked }));
-  els.userBeep.addEventListener("change", () => update({ userBeep: els.userBeep.checked }));
+  els.userSound.addEventListener("change", () => update({ userSound: els.userSound.checked }));
   els.sound.addEventListener("change", () => update({ sound: els.sound.checked }));
   els.device.addEventListener("change", () => update({ deviceId: els.device.value }));
 
@@ -114,7 +114,7 @@ export function createDrawer({ getSettings, update, getImages, setImages, listCa
     const preset = els.preset.value;
     if (preset === "custom") {
       // Start the custom text from whatever is showing now.
-      const current = els.persona.value || PRESETS.funny[lang];
+      const current = els.persona.value || PRESETS.funny?.[lang] || "";
       update({ personaPreset: "custom", personaCustom: { ...s.personaCustom, [lang]: current } });
     } else {
       update({ personaPreset: preset });
@@ -160,25 +160,38 @@ export function createDrawer({ getSettings, update, getImages, setImages, listCa
   }
   $("btn-img-reset").addEventListener("click", () => {
     setImages({ open: null, closed: null });
-    update({ characterMode: "designed" });
+    update({ characterMode: defaultCharacterMode() });
     sync();
   });
   $("btn-reset-settings").addEventListener("click", () => { onReset(); sync(); });
 
+  // The drawer slides in. `_open` is the truth; `hidden` follows once the
+  // slide-out has finished.
+  let _open = false;
+  let hideTimer = 0;
+  const SLIDE_MS = 240;
+
   return {
     sync,
-    get isOpen() { return !drawer.hidden; },
+    get isOpen() { return _open; },
     async open() {
+      _open = true;
+      clearTimeout(hideTimer);
       drawer.hidden = false;
+      void drawer.offsetWidth; // let the browser see the closed position first
+      drawer.classList.add("in");
       $("btn-settings").setAttribute("aria-expanded", "true");
       sync();
       await fillDevices();
-      $("btn-close-settings").focus();
+      if (_open) $("btn-close-settings").focus();
     },
     close() {
-      drawer.hidden = true;
+      _open = false;
+      drawer.classList.remove("in");
       $("btn-settings").setAttribute("aria-expanded", "false");
       $("btn-settings").focus({ preventScroll: true });
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => { if (!_open) drawer.hidden = true; }, SLIDE_MS);
     },
   };
 }

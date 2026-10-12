@@ -1,15 +1,26 @@
-// Small Web Audio synth for the Morse beeps. One voice per speaker, held for
-// as long as the eyes are closed, like a telegraph sounder.
+// Small Web Audio synth. Two kinds of sound:
+//  - held tones, one voice per speaker, kept for as long as the eyes are
+//    closed (like a telegraph sounder): the AI is a lower triangle wave,
+//    the user a higher, quieter sine;
+//  - short cues for the user: a tick when a letter is accepted, a low
+//    buzz when a code matches nothing, two rising notes when a message sends.
 
 const VOICES = {
   ai: { freq: 440, type: "triangle", gain: 1.0 },
-  user: { freq: 660, type: "sine", gain: 0.55 },
+  user: { freq: 660, type: "sine", gain: 0.6 },
+};
+
+const CUES = {
+  letter: [{ freq: 988, ms: 45, gain: 0.5 }],
+  invalid: [{ freq: 180, ms: 110, gain: 0.7, type: "square" }],
+  send: [{ freq: 523, ms: 70, gain: 0.55 }, { freq: 784, ms: 110, gain: 0.55, at: 80 }],
 };
 
 export class Sound {
   constructor() {
     this.ctx = null;
-    this.enabled = true;
+    // Xeno's beep and the user's own sounds can be switched separately.
+    this.channel = { ai: true, user: true };
     this.volume = 0.5;
     this.active = {};
   }
@@ -27,7 +38,7 @@ export class Sound {
   }
 
   start(who) {
-    if (!this.enabled || !this.ctx || this.active[who] || this.volume <= 0) return;
+    if (!this.channel[who] || !this.ctx || this.active[who] || this.volume <= 0) return;
     const spec = VOICES[who];
     const ctx = this.ctx;
     const osc = ctx.createOscillator();
@@ -56,5 +67,29 @@ export class Sound {
 
   stopAll() {
     Object.keys(VOICES).forEach((who) => this.stop(who));
+  }
+
+  // A named short cue: "letter", "invalid" or "send".
+  cue(name) {
+    if (!this.channel.user || !this.ctx || this.volume <= 0) return;
+    const notes = CUES[name];
+    if (!notes) return;
+    const ctx = this.ctx;
+    const base = ctx.currentTime;
+    for (const note of notes) {
+      const start = base + (note.at || 0) / 1000;
+      const end = start + note.ms / 1000;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = note.type || "sine";
+      osc.frequency.value = note.freq;
+      const peak = 0.22 * this.volume * note.gain;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(peak, start + 0.006);
+      gain.gain.linearRampToValueAtTime(0, end);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(start);
+      osc.stop(end + 0.02);
+    }
   }
 }

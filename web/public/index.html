@@ -7,136 +7,141 @@
   <meta name="description" content="Gõ mã Morse bằng cách chớp mắt và trò chuyện với Xeno Assistant, trợ lý AI trả lời cũng bằng cách chớp mắt.">
   <title>Xeno Assistant</title>
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
-  <link rel="preload" href="fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/bricolage-grotesque-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/ibm-plex-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
+<a class="skip" href="#chat-log" data-i18n="skipLink">Chuyển tới cuộc trò chuyện</a>
+
 <div class="app" id="app">
 
   <header class="top">
-    <div class="brand">
-      <h1>Xeno Assistant</h1>
-      <p data-i18n="tagline">Chat bằng mã Morse, chớp mắt để gõ</p>
-    </div>
-    <div class="top-actions">
-      <span class="badge mono" id="fps" title="Tốc độ nhận diện khuôn mặt" data-i18n-title="fpsTitle">-- FPS</span>
-      <button class="btn small" id="btn-lang" type="button" aria-label="Đổi ngôn ngữ" data-i18n-aria="langBtn">VI</button>
-      <button class="btn small" id="btn-pause" type="button" aria-pressed="false"><span data-i18n="pause">Tạm dừng</span> <kbd>P</kbd></button>
-      <button class="btn small" id="btn-mute" type="button" aria-pressed="false"><span data-i18n="sound">Âm thanh</span> <kbd>M</kbd></button>
-      <button class="btn small" id="btn-settings" type="button" aria-expanded="false" aria-controls="drawer"><span data-i18n="settings">Cài đặt</span> <kbd>X</kbd></button>
-    </div>
+    <h1 class="wordmark">Xeno Assistant</h1>
+    <nav class="tools" aria-label="Điều khiển" data-i18n-aria="toolsLabel">
+      <span class="fps" id="fps" title="Tốc độ nhận diện khuôn mặt" data-i18n-title="fpsTitle">-- FPS</span>
+      <button class="tool" id="btn-lang" type="button" aria-label="Đổi ngôn ngữ" data-i18n-aria="langBtn"><b>VI</b><span>EN</span></button>
+      <button class="tool" id="btn-pause" type="button" aria-pressed="false"><span data-i18n="pause">Tạm dừng</span><kbd>P</kbd></button>
+      <button class="tool" id="btn-mute" type="button" aria-pressed="false"><span data-i18n="sound">Âm thanh</span><kbd>M</kbd></button>
+      <button class="tool" id="btn-settings" type="button" aria-expanded="false" aria-controls="drawer"><span data-i18n="settings">Cài đặt</span><kbd>X</kbd></button>
+      <button class="tool" id="btn-logout" type="button" hidden data-i18n="logout">Đăng xuất</button>
+    </nav>
   </header>
 
-  <main class="grid">
+  <main class="desk">
 
-    <!-- AI column -->
-    <div class="col col-ai">
-      <section class="card panel" aria-labelledby="h-ai">
-        <div class="panel-head">
-          <h2 id="h-ai">Xeno Assistant</h2>
-          <div class="status"><span class="dot" id="ai-dot"></span><span id="ai-status">Sẵn sàng</span></div>
-        </div>
-        <div class="stage" id="character" role="img" aria-label="Khuôn mặt của Xeno Assistant. Mắt mở hoặc đóng theo từng ký hiệu Morse." data-i18n-aria="aiFaceLabel"></div>
-        <svg class="strip" viewBox="0 0 400 24" role="img" aria-label="Mã Morse của AI" data-i18n-aria="aiStripLabel">
-          <path id="ai-strip-live" class="strip-live" d=""></path>
-          <path id="ai-strip" class="strip-code" d=""></path>
-        </svg>
-      </section>
-      <section class="card line" aria-label="Câu AI đang gõ" data-i18n-aria="aiLineLabel">
-        <span class="line-who">Xeno</span>
-        <div class="line-body">
-          <span id="ai-line" class="line-text"></span>
-          <span id="ai-placeholder" class="line-empty" data-i18n="aiPlaceholder">AI trả lời bằng mã Morse</span>
-          <span class="caret" id="ai-caret" hidden></span>
-        </div>
-        <button class="btn small" id="btn-skip" type="button" hidden data-i18n="skip">Bỏ qua</button>
-      </section>
-    </div>
+    <section class="actor actor-ai" aria-labelledby="h-ai">
+      <h2 class="sr" id="h-ai">Xeno Assistant</h2>
+      <div class="plate" id="character" role="img" aria-label="Khuôn mặt của Xeno Assistant. Mắt mở hoặc đóng theo từng ký hiệu Morse." data-i18n-aria="aiFaceLabel"></div>
+      <p class="actor-status"><i class="lamp" id="ai-dot"></i><span id="ai-status">Sẵn sàng</span></p>
+    </section>
 
-    <!-- Middle column: chart and chat -->
-    <div class="col col-mid">
-      <section class="card chart" aria-labelledby="h-chart">
-        <div class="panel-head">
-          <h2 id="h-chart" data-i18n="chartTitle">Bảng Morse</h2>
-          <div class="chart-tools">
-            <span class="muted small-text" id="chart-note">26 chữ cái</span>
-            <div class="seg" role="group" aria-label="Bảng chữ hoặc số" data-i18n-aria="chartToggle">
-              <button type="button" class="seg-btn" id="chart-letters" aria-pressed="true">A-Z</button>
-              <button type="button" class="seg-btn" id="chart-digits" aria-pressed="false">0-9</button>
-            </div>
-          </div>
-        </div>
-        <div class="chart-grid" id="chart-grid"></div>
-      </section>
+    <section class="actor actor-user" aria-labelledby="h-user">
+      <h2 class="sr" id="h-user" data-i18n="you">Bạn</h2>
+      <div class="cam" id="cam-stage">
+        <video id="cam" playsinline muted autoplay></video>
+        <p class="cam-empty" id="cam-empty" data-i18n="camEmpty">Camera chưa bật</p>
+        <div class="chip" id="chip-l"><span class="gauge"><i></i></span><span class="num">100</span></div>
+        <div class="chip" id="chip-r"><span class="gauge"><i></i></span><span class="num">100</span></div>
+        <p class="cam-hint" id="cam-hint" hidden></p>
+      </div>
+      <p class="actor-status"><i class="lamp" id="user-dot"></i><span id="user-status">Chờ bắt đầu</span></p>
+    </section>
 
-      <section class="card chat" aria-labelledby="h-chat">
-        <div class="panel-head">
-          <h2 id="h-chat">Chat</h2>
-          <button class="btn small ghost" id="btn-clear-chat" type="button" data-i18n="clearChat">Xóa chat</button>
-        </div>
-        <div class="chat-log" id="chat-log" role="log" aria-live="polite"></div>
-      </section>
-    </div>
+    <section class="tape-zone" aria-label="Băng giấy Morse" data-i18n-aria="tapeLabel">
+      <span class="tape-who" id="tape-who">Bạn</span>
+      <div class="tape" id="tape-view">
+        <svg id="tape-svg" role="img" aria-label="Mã Morse đang được gõ" data-i18n-aria="tapeSvgLabel"></svg>
+        <p class="tape-idle" id="tape-idle"></p>
+      </div>
+    </section>
 
-    <!-- User column -->
-    <div class="col col-user">
-      <section class="card panel" aria-labelledby="h-user">
-        <div class="panel-head">
-          <h2 id="h-user" data-i18n="you">Bạn</h2>
-          <div class="status"><span class="dot" id="user-dot"></span><span id="user-status">Chờ bắt đầu</span></div>
+    <section class="talk" aria-labelledby="h-chat">
+      <h2 class="sr" id="h-chat">Chat</h2>
+      <div class="transcript" id="chat-log" role="log" aria-live="polite" tabindex="-1">
+        <div class="msg ai live" id="ai-live" hidden>
+          <span class="who" data-who="ai">Xeno</span>
+          <p class="text"><span id="ai-line"></span><span class="caret" id="ai-caret" hidden></span></p>
+          <button class="link" id="btn-skip" type="button" hidden data-i18n="skip">Bỏ qua</button>
         </div>
-        <div class="stage cam" id="cam-stage">
-          <video id="cam" playsinline muted autoplay></video>
-          <div class="cam-empty" id="cam-empty" data-i18n="camEmpty">Camera chưa bật</div>
-          <div class="chip" id="chip-l"><i></i><span class="mono">100%</span></div>
-          <div class="chip" id="chip-r"><i></i><span class="mono">100%</span></div>
-          <div class="cam-hint" id="cam-hint" hidden></div>
-        </div>
-        <svg class="strip" viewBox="0 0 400 24" role="img" aria-label="Mã Morse bạn đang gõ" data-i18n-aria="userStripLabel">
-          <path id="user-strip-live" class="strip-live" d=""></path>
-          <path id="user-strip" class="strip-code" d=""></path>
-        </svg>
-      </section>
-      <section class="card line" aria-label="Câu bạn đang gõ" data-i18n-aria="userLineLabel">
-        <span class="line-who" data-i18n="you">Bạn</span>
-        <div class="line-body">
-          <span id="user-line" class="line-text"></span>
-          <span id="user-placeholder" class="line-empty" data-i18n="userPlaceholder">Chớp mắt để gõ tin nhắn</span>
-          <span class="caret" id="user-caret" hidden></span>
-        </div>
-        <div class="send-box">
+      </div>
+
+      <div class="compose">
+        <span class="who" data-i18n="you">Bạn</span>
+        <p class="compose-text">
+          <span id="user-line"></span><span class="caret" id="user-caret" hidden></span><span class="placeholder" id="user-placeholder" data-i18n="userPlaceholder">Chớp mắt để gõ tin nhắn</span>
+        </p>
+        <div class="compose-actions">
           <svg class="ring" id="ring" viewBox="0 0 36 36" aria-hidden="true" hidden>
             <circle class="ring-bg" cx="18" cy="18" r="15"></circle>
             <circle class="ring-fg" id="ring-fg" cx="18" cy="18" r="15" pathLength="100"></circle>
           </svg>
-          <span class="ring-text mono" id="ring-text" hidden></span>
-          <button class="btn small primary" id="btn-send" type="button" disabled><span data-i18n="send">Gửi</span> <kbd>Enter</kbd></button>
+          <span class="ring-text" id="ring-text" hidden></span>
+          <button class="send" id="btn-send" type="button" disabled><span data-i18n="send">Gửi</span><kbd>Enter</kbd></button>
         </div>
-      </section>
-    </div>
+      </div>
+      <p class="keys" data-i18n="footKeys">Space để chớp thử, Enter để gửi, Backspace để xóa ký tự cuối.</p>
+    </section>
+
+    <aside class="sheet" aria-labelledby="h-chart">
+      <div class="sheet-head">
+        <h2 id="h-chart" data-i18n="chartTitle">Bảng Morse</h2>
+        <span class="sheet-note" id="chart-note">26 chữ cái</span>
+        <div class="switch" role="group" aria-label="Bảng chữ hoặc số" data-i18n-aria="chartToggle">
+          <button type="button" id="chart-letters" aria-pressed="true">A-Z</button>
+          <button type="button" id="chart-digits" aria-pressed="false">0-9</button>
+        </div>
+      </div>
+      <div class="chart-grid" id="chart-grid"></div>
+      <button class="link clear" id="btn-clear-chat" type="button" data-i18n="clearChat">Xóa cuộc trò chuyện</button>
+    </aside>
 
   </main>
-
-  <footer class="foot">
-    <span data-i18n="footKeys">Bàn phím: Space = chớp (thử), Enter = gửi, Backspace = xóa ký tự cuối</span>
-  </footer>
 </div>
 
-<!-- Start overlay -->
-<div class="overlay" id="overlay" role="dialog" aria-modal="true" aria-labelledby="ov-title">
-  <div class="overlay-card">
+<!-- Password sheet, shown only when the server asks for a password -->
+<div class="overlay" id="login" role="dialog" aria-modal="true" aria-labelledby="login-title" hidden>
+  <form class="form" id="login-form" novalidate>
+    <h2 id="login-title">Xeno Assistant</h2>
+    <p class="lead" data-i18n="loginLead">Nhập mật khẩu để vào.</p>
+    <label class="field-ink"><span data-i18n="loginPassword">Mật khẩu</span>
+      <input type="password" id="login-password" autocomplete="current-password" maxlength="200"></label>
+    <p class="ov-status" id="login-error" role="alert"></p>
+    <div class="ov-actions">
+      <button class="btn-ink" id="btn-login" type="submit" data-i18n="loginButton">Vào</button>
+      <button class="link" id="btn-login-lang" type="button">English</button>
+    </div>
+  </form>
+</div>
+
+<!-- Start sheet -->
+<div class="overlay" id="overlay" role="dialog" aria-modal="true" aria-labelledby="ov-title" hidden>
+  <div class="form">
     <h2 id="ov-title">Xeno Assistant</h2>
-    <p class="lead" data-i18n="ovLead">Gõ mã Morse bằng cách chớp mắt rồi trò chuyện với Xeno. Xeno cũng trả lời bằng cách chớp mắt.</p>
+    <p class="lead" data-i18n="ovLead">Chớp mắt để gõ mã Morse. Xeno đọc tin của bạn và chớp mắt trả lời.</p>
     <ul class="howto">
-      <li data-i18n="ovHow1">Chớp ngắn là chấm, nhắm lâu hơn một chút là gạch.</li>
-      <li data-i18n="ovHow2">Nghỉ ngắn để sang chữ mới, nghỉ lâu hơn để sang từ mới.</li>
-      <li data-i18n="ovHow3">Dừng vài giây sau chữ cuối, tin nhắn tự gửi đi.</li>
+      <li>
+        <svg class="howto-marks" viewBox="0 0 64 16" aria-hidden="true"><path class="mk" d="M10 8h0.01"/></svg>
+        <span data-i18n="ovHowDot">Chớp ngắn là một chấm.</span>
+      </li>
+      <li>
+        <svg class="howto-marks" viewBox="0 0 64 16" aria-hidden="true"><path class="mk" d="M10 8h22"/></svg>
+        <span data-i18n="ovHowDash">Nhắm mắt lâu hơn một chút là một gạch.</span>
+      </li>
+      <li>
+        <svg class="howto-marks" viewBox="0 0 64 16" aria-hidden="true"><path class="mk" d="M10 8h0.01M22 8h22M56 8h0.01"/></svg>
+        <span data-i18n="ovHowGap">Mở mắt nghỉ ngắn để sang chữ mới, nghỉ lâu hơn để sang từ mới.</span>
+      </li>
+      <li>
+        <svg class="howto-marks" viewBox="0 0 64 16" aria-hidden="true"><path class="mk sent" d="M8 8h48"/></svg>
+        <span data-i18n="ovHowSend">Dừng vài giây sau chữ cuối, tin nhắn tự gửi đi.</span>
+      </li>
     </ul>
     <p class="privacy" data-i18n="ovPrivacy">Video chỉ được xử lý ngay trong trình duyệt và không được tải lên. Chỉ nội dung tin nhắn được gửi tới máy chủ để AI trả lời.</p>
-    <p class="mode-line mono" id="ov-mode"></p>
+    <p class="mode-line" id="ov-mode"></p>
     <div class="ov-actions">
-      <button class="btn primary big" id="btn-start-cam" type="button" data-i18n="ovStartCam">Bật camera và bắt đầu</button>
-      <button class="btn big" id="btn-start-key" type="button" data-i18n="ovStartKey">Chỉ dùng bàn phím (thử)</button>
+      <button class="btn-ink" id="btn-start-cam" type="button" data-i18n="ovStartCam">Bật camera và bắt đầu</button>
+      <button class="link" id="btn-start-key" type="button" data-i18n="ovStartKey">Dùng bàn phím để thử</button>
     </div>
     <p class="ov-status" id="ov-status" role="status" aria-live="polite"></p>
   </div>
@@ -146,15 +151,15 @@
 <aside class="drawer" id="drawer" aria-labelledby="dr-title" hidden>
   <div class="drawer-head">
     <h2 id="dr-title" data-i18n="settings">Cài đặt</h2>
-    <button class="btn small" id="btn-close-settings" type="button"><span data-i18n="close">Đóng</span> <kbd>Esc</kbd></button>
+    <button class="tool" id="btn-close-settings" type="button"><span data-i18n="close">Đóng</span><kbd>Esc</kbd></button>
   </div>
   <div class="drawer-body">
 
     <fieldset>
       <legend data-i18n="setLang">Ngôn ngữ</legend>
-      <div class="seg" role="group">
-        <button type="button" class="seg-btn" data-lang="vi" aria-pressed="true">Tiếng Việt</button>
-        <button type="button" class="seg-btn" data-lang="en" aria-pressed="false">English</button>
+      <div class="switch" role="group">
+        <button type="button" data-lang="vi" aria-pressed="true">Tiếng Việt</button>
+        <button type="button" data-lang="en" aria-pressed="false">English</button>
       </div>
       <p class="hint" data-i18n="setLangHint">Đổi cả giao diện lẫn ngôn ngữ Xeno trả lời. Tiếng Việt được gõ không dấu.</p>
     </fieldset>
@@ -165,19 +170,27 @@
         <select id="set-device"></select></label>
       <label class="check"><input type="checkbox" id="set-mirror"> <span data-i18n="setMirror">Lật ngang hình như gương</span></label>
       <label class="check"><input type="checkbox" id="set-swap"> <span data-i18n="setSwap">Đổi mắt trái và mắt phải</span></label>
-      <label class="field range"><span><span data-i18n="setThreshold">Ngưỡng nhắm mắt</span> <b class="mono" id="out-threshold"></b></span>
+      <label class="field range"><span><span data-i18n="setThreshold">Ngưỡng nhắm mắt</span> <b id="out-threshold"></b></span>
         <input type="range" id="set-threshold" min="0.25" max="0.70" step="0.01"></label>
       <p class="hint" data-i18n="setThresholdHint">Giảm nếu chớp mắt không được nhận, tăng nếu bị nhận nhầm.</p>
     </fieldset>
 
     <fieldset>
       <legend data-i18n="setTyping">Gõ chữ</legend>
-      <label class="field range"><span><span data-i18n="setUnit">Đơn vị thời gian t</span> <b class="mono" id="out-unit"></b></span>
+      <label class="field range"><span><span data-i18n="setUnit">Đơn vị thời gian t</span> <b id="out-unit"></b></span>
         <input type="range" id="set-unit" min="60" max="300" step="5"></label>
       <p class="hint" data-i18n="setUnitHint">Chấm dưới 1,5 t, gạch từ 1,5 t. Nghỉ 3 t sang chữ mới, 7 t sang từ mới.</p>
-      <label class="field range"><span><span data-i18n="setSendDelay">Tự gửi sau khi dừng</span> <b class="mono" id="out-delay"></b></span>
+      <label class="field range"><span><span data-i18n="setSendDelay">Tự gửi sau khi dừng</span> <b id="out-delay"></b></span>
         <input type="range" id="set-delay" min="1.5" max="8" step="0.5"></label>
-      <label class="check"><input type="checkbox" id="set-userbeep"> <span data-i18n="setUserBeep">Phát tiếng bíp khi bạn nhắm mắt</span></label>
+    </fieldset>
+
+    <fieldset>
+      <legend data-i18n="setSound">Âm thanh</legend>
+      <label class="check"><input type="checkbox" id="set-sound"> <span data-i18n="setSoundOn">Tiếng bíp của Xeno</span></label>
+      <label class="check"><input type="checkbox" id="set-usersound"> <span data-i18n="setUserSound">Tiếng của bạn khi gõ</span></label>
+      <p class="hint" data-i18n="setUserSoundHint">Một tiếng bíp kéo dài khi bạn nhắm mắt, một tiếng tích khi xong chữ, hai nốt khi gửi.</p>
+      <label class="field range"><span><span data-i18n="setVolume">Âm lượng</span> <b id="out-volume"></b></span>
+        <input type="range" id="set-volume" min="0" max="1" step="0.05"></label>
     </fieldset>
 
     <fieldset>
@@ -191,25 +204,19 @@
         </select></label>
       <label class="field"><span data-i18n="setPersona">Mô tả tính cách</span>
         <textarea id="set-persona" rows="5" maxlength="800"></textarea></label>
-      <p class="hint"><span id="persona-count" class="mono">0</span>/800 · <span data-i18n="setPersonaHint">Sửa nội dung để chuyển sang kiểu Tự viết.</span></p>
-      <label class="field range"><span><span data-i18n="setAiSpeed">Tốc độ chớp mắt của AI</span> <b class="mono" id="out-aispeed"></b></span>
-        <input type="range" id="set-aispeed" min="0.5" max="2" step="0.1"></label>
-      <label class="field range"><span><span data-i18n="setMaxChars">Độ dài tối đa câu trả lời</span> <b class="mono" id="out-maxchars"></b></span>
+      <p class="hint"><span id="persona-count">0</span>/800. <span data-i18n="setPersonaHint">Sửa nội dung để chuyển sang kiểu Tự viết.</span></p>
+      <label class="field range"><span><span data-i18n="setAiSpeed">Tốc độ chớp mắt của Xeno</span> <b id="out-aispeed"></b></span>
+        <input type="range" id="set-aispeed" min="0.5" max="3" step="0.1"></label>
+      <p class="hint" data-i18n="setAiSpeedHint">Tính theo đơn vị t của bạn. Mỗi đơn vị của Xeno không ngắn hơn 30 ms.</p>
+      <label class="field range"><span><span data-i18n="setMaxChars">Độ dài tối đa câu trả lời</span> <b id="out-maxchars"></b></span>
         <input type="range" id="set-maxchars" min="20" max="120" step="5"></label>
     </fieldset>
 
     <fieldset>
-      <legend data-i18n="setSound">Âm thanh</legend>
-      <label class="check"><input type="checkbox" id="set-sound"> <span data-i18n="setSoundOn">Bật tiếng bíp của AI</span></label>
-      <label class="field range"><span><span data-i18n="setVolume">Âm lượng</span> <b class="mono" id="out-volume"></b></span>
-        <input type="range" id="set-volume" min="0" max="1" step="0.05"></label>
-    </fieldset>
-
-    <fieldset>
-      <legend data-i18n="setChar">Hình ảnh AI</legend>
-      <div class="seg" role="group">
-        <button type="button" class="seg-btn" data-char="designed" aria-pressed="true" data-i18n="charDesigned">Thiết kế sẵn</button>
-        <button type="button" class="seg-btn" data-char="custom" aria-pressed="false" data-i18n="charCustom">Ảnh của bạn</button>
+      <legend data-i18n="setChar">Hình ảnh của Xeno</legend>
+      <div class="switch" role="group">
+        <button type="button" data-char="designed" aria-pressed="true" data-i18n="charDesigned">Thiết kế sẵn</button>
+        <button type="button" data-char="custom" aria-pressed="false" data-i18n="charCustom">Ảnh của bạn</button>
       </div>
       <div class="img-pick">
         <label class="img-slot"><span data-i18n="imgOpen">Mắt mở</span>
@@ -220,11 +227,11 @@
           <img id="prev-closed" alt="" hidden></label>
       </div>
       <p class="hint" data-i18n="imgHint">Ảnh chỉ được lưu trong trình duyệt của bạn. Hãy dùng ảnh bạn có quyền sử dụng.</p>
-      <button class="btn small ghost" id="btn-img-reset" type="button" data-i18n="imgReset">Xóa ảnh đã chọn</button>
+      <button class="link" id="btn-img-reset" type="button" data-i18n="imgReset">Xóa ảnh đã chọn</button>
     </fieldset>
 
     <div class="drawer-foot">
-      <button class="btn" id="btn-reset-settings" type="button" data-i18n="resetSettings">Đặt lại cài đặt</button>
+      <button class="link" id="btn-reset-settings" type="button" data-i18n="resetSettings">Đặt lại cài đặt</button>
     </div>
   </div>
 </aside>
