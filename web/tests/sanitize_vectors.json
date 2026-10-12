@@ -1,0 +1,20 @@
+[
+  {"in": "Xin chào bạn!", "max": 40, "out": "XIN CHAO BAN!"},
+  {"in": "Đây là một ví dụ", "max": 40, "out": "DAY LA MOT VI DU"},
+  {"in": "đừng lo, mình ở đây", "max": 40, "out": "DUNG LO, MINH O DAY"},
+  {"in": "Hello   world", "max": 40, "out": "HELLO WORLD"},
+  {"in": "  spaces around  ", "max": 40, "out": "SPACES AROUND"},
+  {"in": "I’m fine — thanks…", "max": 40, "out": "I'M FINE - THANKS..."},
+  {"in": "“quoted” text", "max": 40, "out": "QUOTED TEXT"},
+  {"in": "Emoji 😀 gone", "max": 40, "out": "EMOJI GONE"},
+  {"in": "**bold** and #tag", "max": 40, "out": "BOLD AND TAG"},
+  {"in": "2 + 2 = 4", "max": 40, "out": "2 + 2 = 4"},
+  {"in": "a/b (c): d@e", "max": 40, "out": "A/B (C): D@E"},
+  {"in": "one two three four five", "max": 12, "out": "ONE TWO"},
+  {"in": "one two three four five", "max": 13, "out": "ONE TWO THREE"},
+  {"in": "abcdefghijklmnop", "max": 5, "out": "ABCDE"},
+  {"in": "line1\nline2\tx", "max": 40, "out": "LINE1 LINE2 X"},
+  {"in": "", "max": 40, "out": ""},
+  {"in": "???", "max": 40, "out": "???"},
+  {"in": "ß ñ", "max": 40, "out": "SS N"}
+]

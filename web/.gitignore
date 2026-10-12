@@ -1,0 +1,7 @@
+.env
+vendor/
+models/
+__pycache__/
+*.pyc
+node_modules/
+tests/shots/
