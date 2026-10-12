@@ -155,7 +155,7 @@
   </div>
   <div class="drawer-body">
 
-    <fieldset>
+    <fieldset data-master>
       <legend data-i18n="setLang">Ngôn ngữ</legend>
       <div class="switch" role="group">
         <button type="button" data-lang="vi" aria-pressed="true">Tiếng Việt</button>
@@ -166,10 +166,10 @@
 
     <fieldset>
       <legend data-i18n="setCamera">Camera</legend>
-      <label class="field"><span data-i18n="setDevice">Thiết bị</span>
+      <label class="field" data-master><span data-i18n="setDevice">Thiết bị</span>
         <select id="set-device"></select></label>
-      <label class="check"><input type="checkbox" id="set-mirror"> <span data-i18n="setMirror">Lật ngang hình như gương</span></label>
-      <label class="check"><input type="checkbox" id="set-swap"> <span data-i18n="setSwap">Đổi mắt trái và mắt phải</span></label>
+      <label class="check" data-master><input type="checkbox" id="set-mirror"> <span data-i18n="setMirror">Lật ngang hình như gương</span></label>
+      <label class="check" data-master><input type="checkbox" id="set-swap"> <span data-i18n="setSwap">Đổi mắt trái và mắt phải</span></label>
       <label class="field range"><span><span data-i18n="setThreshold">Ngưỡng nhắm mắt</span> <b id="out-threshold"></b></span>
         <input type="range" id="set-threshold" min="0.25" max="0.70" step="0.01"></label>
       <p class="hint" data-i18n="setThresholdHint">Giảm nếu chớp mắt không được nhận, tăng nếu bị nhận nhầm.</p>
@@ -184,7 +184,7 @@
         <input type="range" id="set-delay" min="1.5" max="8" step="0.5"></label>
     </fieldset>
 
-    <fieldset>
+    <fieldset data-master>
       <legend data-i18n="setSound">Âm thanh</legend>
       <label class="check"><input type="checkbox" id="set-sound"> <span data-i18n="setSoundOn">Tiếng bíp của Xeno</span></label>
       <label class="check"><input type="checkbox" id="set-usersound"> <span data-i18n="setUserSound">Tiếng của bạn khi gõ</span></label>
@@ -193,7 +193,7 @@
         <input type="range" id="set-volume" min="0" max="1" step="0.05"></label>
     </fieldset>
 
-    <fieldset>
+    <fieldset data-master>
       <legend data-i18n="setAi">Xeno Assistant</legend>
       <label class="field"><span data-i18n="setPreset">Tính cách</span>
         <select id="set-preset">
@@ -212,7 +212,7 @@
         <input type="range" id="set-maxchars" min="20" max="120" step="5"></label>
     </fieldset>
 
-    <fieldset>
+    <fieldset data-master>
       <legend data-i18n="setChar">Hình ảnh của Xeno</legend>
       <div class="switch" role="group">
         <button type="button" data-char="designed" aria-pressed="true" data-i18n="charDesigned">Thiết kế sẵn</button>
@@ -230,7 +230,7 @@
       <button class="link" id="btn-img-reset" type="button" data-i18n="imgReset">Xóa ảnh đã chọn</button>
     </fieldset>
 
-    <div class="drawer-foot">
+    <div class="drawer-foot" data-master>
       <button class="link" id="btn-reset-settings" type="button" data-i18n="resetSettings">Đặt lại cài đặt</button>
     </div>
   </div>

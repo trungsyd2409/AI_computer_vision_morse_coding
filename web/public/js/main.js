@@ -475,7 +475,6 @@ function toggleMute() {
 }
 
 function toggleDrawer() {
-  if (!isMaster) return;   // Settings belong to the master password
   if (drawer.isOpen) drawer.close();
   else drawer.open();
 }
@@ -567,7 +566,8 @@ function setChartSet(name) {
 
 // -- boot ---------------------------------------------------------------------------------------------------
 
-$("btn-settings").hidden = !isMaster;
+$("btn-settings").hidden = false;
+if (!isMaster) $("drawer").dataset.lite = "";   // user password: only the three tuning sliders
 $("btn-logout").hidden = !session.auth;
 $("overlay").hidden = false;
 applyI18n(document);

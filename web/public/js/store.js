@@ -41,8 +41,9 @@ const RANGES = {
 // What a fresh visitor starts with: DEFAULTS plus whatever the server sends.
 let BASE = { ...DEFAULTS, personaCustom: { ...DEFAULTS.personaCustom } };
 
-// Settings a visitor with the user password may still change (the header buttons).
-export const USER_KEYS = ["lang", "sound", "userSound", "volume"];
+// Settings a visitor with the user password may still change: the header buttons
+// plus the three personal tuning sliders (eye threshold, time unit t, auto-send delay).
+export const USER_KEYS = ["lang", "sound", "userSound", "volume", "closeThreshold", "unitMs", "sendDelay"];
 
 function clamp(value, [lo, hi], fallback) {
   const n = Number(value);

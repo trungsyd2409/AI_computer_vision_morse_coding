@@ -480,3 +480,6 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--lamp); }
   .caret { animation: none; }
   .lamp.wait, .char.thinking .lamp-top { animation: none; }
 }
+
+/* Sign-in with the user password: the drawer shows only the camera threshold and the typing timing. */
+.drawer[data-lite] [data-master] { display: none; }

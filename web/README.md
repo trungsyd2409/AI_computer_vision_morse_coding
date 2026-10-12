@@ -55,11 +55,12 @@ XENO_USER_PASSWORD=a-different-phrase-for-guests
 
 | Password | Can chat | Can open Settings |
 | --- | --- | --- |
-| Master | yes | yes |
-| User | yes | no |
+| Master | yes | everything |
+| User | yes | only the eye threshold, time unit t and auto-send delay |
 
 - With no master password the sign-in screen is off and everyone is treated as master. That is fine on your own computer. The server refuses to start if you bind it to a public address without a master password.
-- The user role also gets the default personality and the default reply length from the server, so changing values in the browser tools does not help. It still has the language, sound and volume controls.
+- The user role gets a short Settings panel with three sliders (eye threshold, time unit t, auto-send delay), because those depend on the person's face and typing speed. Their choices are kept in that browser. Everything else in Settings is master only.
+- The user role also gets the default personality and the default reply length from the server, so changing values in the browser tools does not help. It still has the language, sound and volume controls in the header.
 - Wrong passwords are limited to 8 tries per 10 minutes per address.
 - A sign-in lasts `XENO_SESSION_HOURS` (12 by default). The **Sign out** button in the header ends it. To sign everyone out at once, change `XENO_SESSION_SECRET` or restart the server when that is left empty.
 - Check that git ignores your file: `git check-ignore -v .env` should print a line.
