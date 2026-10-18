@@ -43,7 +43,7 @@ POSE_MODEL_URL = (
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Curl Morse"
+APP_TITLE = "Arm Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -51,23 +51,25 @@ SETTINGS_SIZE = (400, 600)
 # ---------------------------------------------------------------------------
 # Visual palette (RGB tuples, 0-255)
 # ---------------------------------------------------------------------------
+# Kept deliberately small: off-white for text and bones, one warm accent for
+# "this is live", and red for errors. No neon, no glow.
 
-TEXT = (244, 246, 250)
-TEXT_MUTED = (150, 160, 178)
-TEXT_FAINT = (98, 108, 126)
-ACCENT = (103, 232, 249)          # cyan, used for the primary highlight
-SUCCESS = (74, 222, 128)
-BONE = (226, 232, 240)            # arm skeleton when the arm is extended
-WARNING = (251, 191, 36)
-DANGER = (251, 113, 133)
+TEXT = (240, 240, 236)
+TEXT_MUTED = (170, 170, 164)
+TEXT_FAINT = (120, 120, 116)
+ACCENT = (255, 196, 64)           # amber: armed hand, newest symbol, matches
+SUCCESS = (120, 220, 140)
+BONE = (240, 240, 236)
+WARNING = (255, 196, 64)
+DANGER = (240, 96, 88)
+PANEL = (14, 14, 14)              # flat backdrop behind text, used with alpha
 
-# One colour per action so the legend, the meters, the typed symbols and
-# the pause countdown all speak the same visual language.
+# Used by the settings window to label each gesture.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # short curl
-    "dash": (167, 139, 250),      # long curl
-    "letter": (251, 191, 36),     # short pause -> end of letter
-    "word": (74, 222, 128),       # long pause  -> space
+    "dot": (240, 240, 236),
+    "dash": (240, 240, 236),
+    "letter": (255, 196, 64),
+    "word": (255, 196, 64),
 }
 
 # ---------------------------------------------------------------------------
@@ -100,37 +102,31 @@ class CameraSettings:
 
 @dataclass
 class ArmSettings:
-    """Threshold and timing for reading dumbbell curls."""
+    """
+    Forearm angles that make up the gestures.
 
-    # Curl is a 0..1 score from the elbow angle: 0 = arm straight (about
-    # 170 deg), 1 = fully curled (about 45 deg). Above `curl_threshold` the
-    # arm counts as curled ("pressed"). Adjustable from 5% to 95%.
-    curl_threshold: float = 0.50
-    # The Morse time unit t, in seconds. Everything is derived from it:
-    # curled < 1.5 t = dot, >= 1.5 t = dash, arm extended 5 t = end of
-    # letter, extended 7 t = end of word. A real curl takes about half a
-    # second, so t defaults much longer than it did for blinks.
-    time_unit: float = 0.50
+    The angle is measured on the camera image, along the forearm (elbow to
+    wrist), against the horizontal: 0 = level, +45 = hand raised
+    diagonally, -45 = hand lowered diagonally.
+
+    Symbol arm (left by default):   +45 = dash, -45 = dot
+    Control arm (right by default): hold a fist to type at all;
+                                    +45 = end of letter, -45 = space
+    Each arm has to come back to level before its next gesture counts.
+    """
+
+    angle_target: float = 45.0        # degrees, the diagonal to aim for
+    angle_tolerance: float = 20.0     # +/- around the target that still counts
+    neutral_band: float = 15.0        # |angle| below this counts as level
+    hold_time: float = 0.10           # seconds a pose must be held to count
     swap_arms: bool = False           # fixes cameras that mirror the image
-    # Which arm curls to type. The other hand is the switch: fist = typing
-    # on, open hand = typing off. S swaps the two roles.
-    curl_side: str = "right"
+    # Which arm types dots and dashes. The other one holds the fist and
+    # ends letters / adds spaces. S swaps the two roles.
+    symbol_side: str = "left"
 
     @property
-    def gate_side(self) -> str:
-        return "left" if self.curl_side == "right" else "right"
-
-    @property
-    def dash_after(self) -> float:
-        return 1.5 * self.time_unit
-
-    @property
-    def letter_gap(self) -> float:
-        return 5.0 * self.time_unit
-
-    @property
-    def word_gap(self) -> float:
-        return 7.0 * self.time_unit
+    def control_side(self) -> str:
+        return "right" if self.symbol_side == "left" else "left"
 
 
 @dataclass

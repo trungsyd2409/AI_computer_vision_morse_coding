@@ -1,9 +1,6 @@
-# Curl Morse
+# Arm Morse
 
-Type Morse code with your arm, like doing dumbbell curls at the gym: a short curl is a dot, a long curl is a dash, and holding the arm straight marks the end of a letter or a word. Only the **right arm** types; the **left hand is the switch**: make a fist to turn typing on, open the hand to turn it off. Press **S** to swap the two roles. The app measures the elbow angle with MediaPipe Pose, reads the fist with MediaPipe Hands, and draws the typing arm's skeleton and the switch hand's 21-point skeleton on the camera image.
-
-![Interface preview](docs/preview.png)
-<sub>Interface preview, rendered with a placeholder camera image.</sub>
+Type Morse code with your forearms in front of a webcam. Hold a **right-hand fist** to type. Tilt the **left forearm** up 45° for a dash or down 45° for a dot. Tilt the **right forearm** (still in a fist) up 45° to end the letter or down 45° to add a space. The app reads the forearm angles with MediaPipe Pose, the fist with MediaPipe Hands, and draws the arm bones and both hand skeletons on the camera image.
 
 ---
 
@@ -62,45 +59,44 @@ The tests cover the Morse logic, the blink detector and the left/right eye mappi
 
 ## How to use it
 
-Stand or sit so that your right **shoulder, elbow and wrist** and your **left hand** are in view.
+Stand or sit so that both **elbows, wrists and hands** are in view.
 
-**Switch hand (left).** Fist = typing on (the hand skeleton turns green, label "FIST on"). Open hand or hand out of view = typing off: you can move the right arm freely and nothing is typed. When you close the fist with the right arm already raised, lower it once first; then curls count.
+The angle that counts is the **forearm** (elbow to wrist) against the horizontal of the screen: 0° is level, +45° is the hand raised diagonally, -45° is the hand lowered diagonally.
 
-**Typing arm (right).** Curl it the way you would lift a dumbbell.
-
-**Swap hands.** Press **S** (or use *Typing arm* in the Arm settings tab) to type with the left arm and switch with the right hand. The choice is saved. All timings come from one time unit **t** (0.5 s by default, adjustable in the settings window):
-
-| Arm | Result | With t = 0.5 s |
+| Arm | Pose | Result |
 |---|---|---|
-| **Short curl**, shorter than 1.5 t | Dot `·` | under 0.75 s |
-| **Long curl**, held 1.5 t or longer | Dash `–` | 0.75 s or more |
-| **Arm straight for 5 t** | End of letter, the Latin letter pops up | 2.5 s |
-| **Arm straight for 7 t** | End of word, a space is added | 3.5 s |
+| **Right hand** | Fist, held | Typing allowed. Open hand or hand out of view = nothing is typed. The hand skeleton turns amber while the fist is held |
+| **Left forearm** | +45° (up) | Dash `-` |
+| **Left forearm** | -45° (down) | Dot `.` |
+| **Right forearm** (fist) | +45° (up) | End of letter: the code is turned into a letter |
+| **Right forearm** (fist) | -45° (down) | Space (ends the letter first if one is still open) |
 
-**Curl score.** The elbow angle is turned into a curl score: about 170° (straight arm) = 0 %, about 45° (fully curled) = 100 %. The arm counts as curled above the **curl threshold** (50 % ≈ 107°) and as straight again once it drops 10 % below it, so a shaky arm near the threshold does not type twice. The angle comes from MediaPipe's 3D world landmarks, so it still works when your forearm points partly towards the camera.
+**Back to level between gestures.** Each forearm has to return to level (about 0°) before its next gesture counts. Two dots in a row are: down, level, down. After the fist closes, each forearm also has to pass level once before it can type.
 
-A dash is typed the moment the curl reaches 1.5 t, while the arm is still up. A dot is typed when the arm comes back down.
+**Hold briefly.** A pose has to be held for the *hold time* (0.10 s by default) to count, so swinging an arm through 45° on the way somewhere else does not type anything. An arm hanging straight down (about -90°) does nothing.
 
-**Arm skeleton.** Each visible arm is drawn as glowing bones with a filled wedge showing the elbow angle, and a readout of the angle in degrees next to the elbow. The arm that is curling lights up cyan (would be a dot) and turns violet once it has become a dash. The Arm curl panel shows both arms as bars, with the white tick at the threshold.
+**Feedback.** A forearm turns amber while it sits on a diagonal that will type, and flashes thicker when its gesture fires. The bottom strip shows the code typed so far, the letter it decodes to (or the letters still reachable), and the message. The Morse chart in the top-right corner dims letters that the current code can no longer reach.
 
-**Example: typing "HI"** (t = 0.5 s)
+**Example: typing "HI"**
 
-1. Do four quick curls (`····`), then keep the arm straight. **H** pops up after 2.5 s.
-2. Do two quick curls (`··`) and keep the arm straight. **I** pops up.
-3. Keep it straight a little longer (3.5 s in total) and a space is added.
+1. Make a right fist with the right forearm level, left forearm level.
+2. Left forearm down, level, down, level, down, level, down, level (`....`).
+3. Right forearm up, then back to level. **H** is added.
+4. Left forearm down, level, down, level (`..`), then right forearm up. **I** is added.
+5. Right forearm down. A space is added.
 
-**Choosing t.** If quick curls come out as dashes, raise **t**; if letters end too slowly, lower it. The slider goes from 0.1 to 1.5 s and the settings window spells out every rule in seconds.
+**Swap roles.** Press **S** (or *Dot / dash arm* in the Arm settings tab) to type dots and dashes with the right arm and hold the fist with the left hand. The choice is saved.
 
-Press **P** to pause listening while you rest, or **Z** to hide the interface and stop input completely. Deleting is done on the keyboard.
+Press **P** to pause typing while you rest, or **Z** to hide the interface and stop input completely. Deleting is done on the keyboard.
 
 ### Keyboard shortcuts
 
 | Key | Action |
 |---|---|
-| `S` | Swap hands: which arm types and which hand is the fist switch |
+| `S` | Swap roles: which arm types dots and dashes, which hand holds the fist |
 | `X` | Open or close the settings window |
 | `Z` | Hide or show the interface. Hidden = normal camera colours and no typing |
-| `P` | Pause or resume listening to your arm |
+| `P` | Pause or resume typing |
 | `H` | Show or hide the Morse chart |
 | `M` | Mute or unmute sounds |
 | `Backspace` | Delete the last symbol, or the last letter if no symbol is pending |
@@ -119,9 +115,14 @@ Press `X` to open it. It has two tabs. Changes apply instantly and are saved to 
 - **Driver settings** (Windows) opens the camera maker's own settings dialog.
 
 **Arm tab**
-- **Curl threshold**: how curled the arm must be to count (5 % to 95 %, default 50 %), marked by the white tick on the curl bars.
-- **Time unit t**: the base timing, from 0.1 to 1.5 s. A card below the slider spells out the dot, dash, letter and space timings for the current value.
-- **Swap left / right arm**: for cameras or phone apps that already mirror the image. It only affects the Left / Right labels.
+- **Diagonal angle**: the forearm angle to aim for (25° to 65°, default 45°).
+- **Angle tolerance**: how far from that angle still counts (default ±20°, so 25° to 65°).
+- **Level band**: how close to 0° counts as level (default ±15°).
+- **Hold time**: how long a pose must be held to count (0 to 0.40 s, default 0.10 s).
+- **Dot / dash arm (S)**: which arm types dots and dashes. The other hand holds the fist.
+- **Swap left / right arm**: for cameras or phone apps that already mirror the image.
+
+A card under the controls lists every gesture with the current angle.
 
 ### Using an iPhone or Android phone as the camera
 
@@ -167,13 +168,13 @@ Think of the app as a small assembly line with five stations.
 
 1. **The camera takes pictures.** About 30 to 60 times a second, the webcam sends a new picture of you.
 
-2. **The face reader measures your eyes.** A pre-trained model from Google finds your face and gives each eye a score from 0 (wide open) to 1 (fully shut). Everybody's eyes rest at a slightly different level, so the app first learns what "open" looks like for you, and measures closing from there.
+2. **The body and hand readers find your arms.** Two pre-trained models from Google find your elbows and wrists, and the 21 points of each hand. Each hand is matched to the nearest wrist, so the app always knows which hand is the right one.
 
-3. **The blink reader times each blink.** It works like a telegraph key, where the length of each press matters. A short blink is a dot; as soon as a blink lasts longer than one and a half time units, it becomes a dash, without waiting for the eyes to open.
+3. **The fist check decides if you are typing.** If the right hand is closed (fingertips folded back near the knuckles) typing is allowed. Open the hand and nothing is typed.
 
-4. **The Morse translator listens to the silence.** Like a radio operator, it treats a short silence as the end of a letter and a longer one as the end of a word. After three time units with your eyes open, the dots and dashes collected so far are looked up in the international Morse table. After seven, a space is added. If a code does not exist, the app shows a red question mark instead of guessing.
+4. **The angle reader turns poses into keys.** For each forearm it measures the angle against the horizontal. Held at +45° or -45° for a moment, that is a gesture; the forearm then has to come back to level before the next one. Left arm: up = dash, down = dot. Right arm: up = end the letter, down = space. When a letter ends, the dots and dashes are looked up in the international Morse table; a code that does not exist is shown as "no match" instead of a guess.
 
-5. **The screen shows the result.** The camera picture is dimmed and information panels that look like frosted glass float around it. A small label next to each eye shows how open it is, the newest symbol ripples when it lands, and the finished letter pops up and is added to the message at the bottom. A short sound confirms every symbol, so you can type without looking.
+5. **The screen shows the result.** The camera keeps its normal colours. Thin bones and hand skeletons show what the app sees, the Morse chart sits in the corner, and the code and message are in a small strip at the bottom. A short sound confirms every symbol, so you can type without looking.
 
 The app never records or uploads anything. Every picture is processed in memory and thrown away straight after.
 
@@ -243,13 +244,9 @@ Both gaps are measured from the same moment, so a new symbol typed between 3 t a
 
 ### Rendering (`compositor.py` and `hud.py`)
 
-Each frame uploads three textures and draws one full-screen triangle strip with a single fragment shader:
+The camera and the UI layer are uploaded as two textures and one small shader puts the UI on top. The camera keeps its own colours: no grading, dimming, blur or vignette. A cover crop (like CSS `object-fit: cover`) fills the 800×600 window at any camera aspect ratio without stretching.
 
-1. **Camera texture** with mipmaps. A cover crop (like CSS `object-fit: cover`) fills the 800×600 window at any camera aspect ratio without stretching. A moderate filter is applied: 12 % desaturation, a gentle cool tint, 14 % dimming and a soft vignette. A `u_filter` uniform blends between this look and the untouched image; the Z key animates it to 0 over about 0.2 s, which also removes the panels, glow and grain.
-2. **Glass panels.** Up to 10 rectangles are passed as uniforms, including the two openness labels that follow the eyes. A rounded-rectangle signed distance field gives anti-aliased edges, a soft drop shadow, a hairline border that is brighter at the top, and an accent colour for flashes. Inside a panel the camera is sampled at mip level 3.4 with five taps, which gives a smooth frosted blur almost for free. The glass keeps about 45 % of the blurred background's brightness with a light smoky tint, clear enough to see the room through it while white text stays readable.
-3. **Glow layer.** An opaque black pygame surface where the symbols, meters and letters are drawn again in colour. The shader adds three mip levels of it (1.0, 2.6 and 4.2), which gives the neon bloom without extra framebuffers or blur passes.
-4. **UI layer.** A transparent pygame surface with text, meters and icons, blended last. The only things placed near the face are the two openness labels: each sits just outside the outer corner of its eye (landmarks 33 and 263, mapped to the user's side like the blink scores), and its position is smoothed with a light exponential filter so the numbers do not jitter. The smoothing affects only where the label is drawn, never the input.
-5. A little animated film grain removes banding in the dark gradients.
+The HUD is drawn with pygame on a transparent surface. Bones and hand skeletons are thin off-white lines with a 1 px dark outline so they stay visible on light and dark backgrounds; all outlines are drawn before the colours so joints stay clean. Text sits on a flat dark backdrop. Amber is the only accent colour.
 
 ### Audio (`audio.py`)
 
@@ -273,15 +270,16 @@ AI_computer_vision_morse_coding/
 │   ├── app.py               main loop, wires everything together
 │   ├── config.py            constants, colours, saved settings
 │   ├── camera.py            threaded webcam reader
-│   ├── arm_tracker.py       MediaPipe Pose wrapper, elbow angle, arm mapping
-│   ├── curls.py             curl timing detector (dot / dash)
-│   ├── hand_tracker.py      MediaPipe Hands wrapper, fist / open-hand switch
+│   ├── arm_tracker.py       MediaPipe Pose wrapper, forearm angle, arm mapping
+│   ├── arm_gestures.py      forearm tilt -> up / down gestures
+│   ├── curls.py             old curl detector (no longer used by the app)
+│   ├── hand_tracker.py      MediaPipe Hands wrapper, fist switch, hand-to-arm matching
 │   ├── face_tracker.py      old face input (no longer used by the app)
 │   ├── blinks.py            old blink detector (no longer used by the app)
 │   ├── morse.py             Morse table and composer state machine
 │   ├── hud.py               everything drawn on top of the camera
-│   ├── draw.py              anti-aliased shapes, glow sprites, easing
-│   ├── compositor.py        ModernGL shader: glass panels and bloom
+│   ├── draw.py              anti-aliased shapes
+│   ├── compositor.py        ModernGL shader: camera + UI layer
 │   ├── audio.py             synthesised feedback sounds
 │   └── settings_window.py   settings window (separate process)
 ├── assets/fonts/            Inter and JetBrains Mono (OFL)

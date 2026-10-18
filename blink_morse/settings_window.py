@@ -20,7 +20,7 @@ import math
 import multiprocessing as mp
 import platform
 
-from .config import (ACCENT, ACTION_COLORS, DANGER, FPS_CHOICES, MIN_ACCEPTABLE_FPS,
+from .config import (ACCENT, DANGER, FPS_CHOICES, MIN_ACCEPTABLE_FPS,
                      RESOLUTION_CHOICES, SETTINGS_SIZE, SETTINGS_TITLE, SUCCESS,
                      TEXT, TEXT_FAINT, TEXT_MUTED, WARNING)
 
@@ -187,13 +187,17 @@ class SettingsWindow:
                 Slider("Gain", "camera", "gain", cam["gain"], 0, 255, 1, "{:.0f}"),
             ]),
             "arm": page([
-                Slider("Curl threshold", "arm", "curl_threshold",
-                       arm["curl_threshold"], 0.05, 0.95, 0.01, "{:.0%}"),
-                Slider("Time unit t", "arm", "time_unit",
-                       arm["time_unit"], 0.10, 1.50, 0.05, "{:.2f} s"),
-                Segmented("Typing arm (S)", "arm", "curl_side",
-                          [("Right arm", "right"), ("Left arm", "left")],
-                          arm.get("curl_side", "right")),
+                Slider("Diagonal angle", "arm", "angle_target",
+                       arm["angle_target"], 25, 65, 1, "{:.0f}\u00b0"),
+                Slider("Angle tolerance", "arm", "angle_tolerance",
+                       arm["angle_tolerance"], 5, 30, 1, "\u00b1{:.0f}\u00b0"),
+                Slider("Level band", "arm", "neutral_band",
+                       arm["neutral_band"], 5, 25, 1, "\u00b1{:.0f}\u00b0"),
+                Slider("Hold time", "arm", "hold_time",
+                       arm["hold_time"], 0.0, 0.40, 0.02, "{:.2f} s"),
+                Segmented("Dot / dash arm (S)", "arm", "symbol_side",
+                          [("Left arm", "left"), ("Right arm", "right")],
+                          arm.get("symbol_side", "left")),
                 Toggle("Swap left / right arm", "arm", "swap_arms", arm["swap_arms"]),
             ]),
         }
@@ -212,18 +216,8 @@ class SettingsWindow:
                                   self.pg.Rect(PAD, footer_y, w, 36))]
 
     def _make_background(self):
-        pg = self.pg
-        w, h = SETTINGS_SIZE
-        surf = pg.Surface((w, h))
-        top, bottom = (12, 15, 22), (17, 21, 33)
-        for y in range(h):
-            k = y / h
-            pg.draw.line(surf, [round(top[i] + (bottom[i] - top[i]) * k) for i in range(3)],
-                         (0, y), (w, y))
-        # A faint coloured light in the corner gives the dark UI some depth.
-        from .draw import glow
-        glow(surf, (40, 120, 150), (w - 40, 30), 220, 0.35)
-        glow(surf, (70, 50, 140), (30, h - 60), 200, 0.25)
+        surf = self.pg.Surface(SETTINGS_SIZE)
+        surf.fill((18, 18, 18))
         return surf
 
     # -- loop -------------------------------------------------------------------
@@ -353,32 +347,34 @@ class SettingsWindow:
             self._draw_timing_card()
 
     def _draw_timing_card(self) -> None:
-        """What the current time unit means, spelled out in seconds."""
+        """The gestures, spelled out with the current angles."""
         pg = self.pg
         from . import draw
         s = self.screen
-        t = self.values["arm"]["time_unit"]
+        arm = self.values["arm"]
+        a = arm["angle_target"]
+        sym = arm.get("symbol_side", "left")
+        ctl = "right" if sym == "left" else "left"
         last = self.pages["arm"][-1].rect
-        card = pg.Rect(PAD, last.bottom + 18, SETTINGS_SIZE[0] - 2 * PAD, 138)
+        card = pg.Rect(PAD, last.bottom + 14, SETTINGS_SIZE[0] - 2 * PAD, 112)
         layer = pg.Surface(card.size, pg.SRCALPHA)
-        draw.rounded_rect(layer, (255, 255, 255, 12), layer.get_rect(), 12)
-        draw.rounded_rect(layer, (255, 255, 255, 26), layer.get_rect(), 12, 1)
+        draw.rounded_rect(layer, (255, 255, 255, 12), layer.get_rect(), 6)
         s.blit(layer, card)
-        s.blit(self._label("Timing"), (card.x + 16, card.y + 14))
+        s.blit(self._label("Gestures (back to level between)"), (card.x + 14, card.y + 10))
 
         rows = [
-            (ACTION_COLORS["dot"], "Dot", f"curl shorter than {1.5 * t:.2f} s"),
-            (ACTION_COLORS["dash"], "Dash", f"curl {1.5 * t:.2f} s or longer"),
-            (ACTION_COLORS["letter"], "End letter", f"arm straight {5 * t:.2f} s"),
-            (ACTION_COLORS["word"], "Space", f"arm straight {7 * t:.2f} s"),
+            (f"{ctl.capitalize()} fist", "hold to type"),
+            (f"{sym.capitalize()} forearm +{a:.0f}\u00b0", "dash"),
+            (f"{sym.capitalize()} forearm -{a:.0f}\u00b0", "dot"),
+            (f"{ctl.capitalize()} forearm +{a:.0f}\u00b0", "end letter"),
+            (f"{ctl.capitalize()} forearm -{a:.0f}\u00b0", "space"),
         ]
-        for i, (color, name, rule) in enumerate(rows):
-            cy = card.y + 46 + i * 24
-            draw.circle(s, color, (card.x + 22, cy), 4)
-            img = self._text("medium", 13, name, TEXT)
-            s.blit(img, img.get_rect(midleft=(card.x + 34, cy)))
-            img = self._text("regular", 12, rule, TEXT_MUTED)
-            s.blit(img, img.get_rect(midright=(card.right - 16, cy)))
+        for i, (pose, action) in enumerate(rows):
+            cy = card.y + 34 + i * 17
+            img = self._text("medium", 12, pose, TEXT)
+            s.blit(img, img.get_rect(midleft=(card.x + 14, cy)))
+            img = self._text("regular", 12, action, TEXT_MUTED)
+            s.blit(img, img.get_rect(midright=(card.right - 14, cy)))
 
     def _label(self, text):
         pg = self.pg
@@ -471,8 +467,6 @@ class Slider(Widget):
         accent = ACCENT if enabled else TEXT_FAINT
         win.pg.draw.rect(surface, (48, 54, 70), (x0, cy - 2, x1 - x0, 4), border_radius=2)
         win.pg.draw.rect(surface, accent, (x0, cy - 2, max(kx - x0, 0), 4), border_radius=2)
-        if enabled and hover:
-            draw.glow(surface, ACCENT, (kx, cy), 22, 0.35)
         draw.circle(surface, (245, 247, 252) if enabled else TEXT_FAINT, (kx, cy), 7)
         draw.ring(surface, accent, (kx, cy), 7, 2)
         img = win._text("medium", 12, self.fmt.format(self.value),
@@ -497,12 +491,10 @@ class Toggle(Widget):
         self._anim += (target - self._anim) * 0.35
         pill = win.pg.Rect(0, 0, 38, 22)
         pill.midright = (self.rect.right, self.rect.centery)
-        off, on = (58, 64, 82), (40, 150, 170)
+        off, on = (70, 70, 70), (190, 145, 40)
         color = [round(off[i] + (on[i] - off[i]) * self._anim) for i in range(3)]
         win.pg.draw.rect(surface, color, pill, border_radius=11)
         kx = pill.x + 11 + self._anim * 16
-        if self.value:
-            draw.glow(surface, ACCENT, (kx, pill.centery), 18, 0.3)
         draw.circle(surface, (245, 247, 252), (kx, pill.centery), 8)
 
 

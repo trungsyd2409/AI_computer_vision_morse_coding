@@ -4,7 +4,6 @@ import unittest
 
 from blink_morse.arm_tracker import (ArmPose, build_result, curl_from_angle,
                                      elbow_angle)
-from blink_morse.config import ArmSettings
 from blink_morse.curls import CurlDetector, CurlKind
 from blink_morse.morse import MorseComposer
 
@@ -83,23 +82,6 @@ class CurlDetectorTest(unittest.TestCase):
         events, _ = play(self.d, [(0.3, None, UP), (0.3, None, DOWN)], self.t)
         self.assertEqual(kinds(events), [CurlKind.DOT])
 
-    def test_letter_after_5t_and_space_after_7t(self):
-        s = ArmSettings(time_unit=0.5)
-        self.assertEqual((s.dash_after, s.letter_gap, s.word_gap), (0.75, 2.5, 3.5))
-        composer = MorseComposer(s.letter_gap, s.word_gap)
-        # dot dash  ->  A, then a long rest adds a space
-        script = [(0.3, DOWN, UP), (0.3, DOWN, DOWN), (1.0, DOWN, UP),
-                  (2.0, DOWN, DOWN)]
-        play(self.d, script, self.t, composer)
-        self.assertEqual(composer.code, ".-")          # 2.0 s < 2.5 s, not yet
-        play(self.d, [(0.6, DOWN, DOWN)], self.t + 3.6, composer)
-        self.assertEqual(composer.text, "A")
-        play(self.d, [(1.2, DOWN, DOWN)], self.t + 4.2, composer)
-        self.assertEqual(composer.text, "A ")
-
-
-
-class GateTest(unittest.TestCase):
     @staticmethod
     def hand(ratio):
         """Synthetic hand: knuckles 1 unit from the wrist, tips `ratio` units."""

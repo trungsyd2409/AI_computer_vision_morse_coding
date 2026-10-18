@@ -1,10 +1,12 @@
 """
-Curl Morse - type Morse code with dumbbell-style arm curls in front of a
-webcam. Short curl = dot, long curl = dash, keep the arm straight to end
-a letter (5 t) or a word (7 t).
+Arm Morse - type Morse code with diagonal forearm poses in front of a webcam.
+
+Hold a right-hand fist to type. Left forearm raised 45 deg = dash, lowered
+45 deg = dot. Right forearm raised 45 deg = end of letter, lowered 45 deg =
+space. Bring each forearm back to level between gestures.
 
 Run:  python main.py
-Keys: X settings, Z hide UI, P pause listening, H toggle chart, M mute,
+Keys: S swap arms, X settings, Z hide UI, P pause, H toggle chart, M mute,
       Backspace / Delete edit, Esc quit.
 """
 

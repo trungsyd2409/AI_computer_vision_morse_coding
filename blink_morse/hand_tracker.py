@@ -2,9 +2,9 @@
 Wrapper around MediaPipe's Hand Landmarker, plus the fist / open-hand
 switch.
 
-One hand (the left one by default) does not type. It works as a safety
-switch: make a fist and the curling arm types Morse, open the hand and
-nothing is typed. The hand is drawn as a 21-point skeleton.
+The control hand (the right one by default) works as a safety switch:
+hold a fist and the arm gestures type Morse, open the hand and nothing is
+typed. Both hands are drawn as 21-point skeletons.
 
 Fist test
 ---------
@@ -62,25 +62,40 @@ def openness_ratio(points: np.ndarray) -> float:
 
 
 class FistGate:
-    """Fist = on, open hand = off, hand not in view = off."""
+    """
+    Fist = on, open hand = off, hand not in view = off.
+
+    Hand tracking often drops a frame or two while the arm is moving (for
+    example while tilting the control arm to end a letter). A fist that
+    disappears is kept for `GRACE` seconds, so that short dropout does
+    not switch typing off in the middle of a gesture.
+    """
 
     FIST_BELOW = 1.30      # ratio under which the hand becomes a fist
     OPEN_ABOVE = 1.50      # ratio over which it counts as open again
+    GRACE = 0.30           # seconds a lost fist still counts as a fist
 
     def __init__(self):
         self.fist = False
         self.visible = False
         self.ratio = 2.0
+        self._last_seen = None
 
     def reset(self) -> None:
         self.fist = False
         self.visible = False
+        self._last_seen = None
 
-    def update(self, points: Optional[np.ndarray]) -> bool:
+    def update(self, points: Optional[np.ndarray], now: Optional[float] = None) -> bool:
         if points is None:
+            self.visible = False
+            if (self.fist and now is not None and self._last_seen is not None
+                    and now - self._last_seen <= self.GRACE):
+                return True
             self.reset()
             return False
         self.visible = True
+        self._last_seen = now
         self.ratio = openness_ratio(points)
         if self.fist:
             self.fist = self.ratio < self.OPEN_ABOVE
@@ -191,3 +206,32 @@ def pick_switch_hand(hands: list, gate_wrist, curl_wrist,
         if best_d is None or d < best_d:
             best, best_d = pts, d
     return best
+
+
+def assign_hands(hands: list, wrists: dict, max_dist: float = 0.15) -> dict:
+    """
+    Match detected hands to the body's left and right wrists.
+
+    MediaPipe's own Left/Right hand labels can come out flipped, so each
+    hand is given to the side whose pose wrist is nearest (normalised
+    distance under `max_dist`). Each side gets at most one hand and each
+    hand is used once. Returns {"left": pts or None, "right": pts or None}.
+    """
+    pairs = []
+    for i, pts in enumerate(hands):
+        w = np.asarray(pts[0][:2], dtype=np.float64)
+        for side in ("left", "right"):
+            anchor = wrists.get(side)
+            if anchor is None:
+                continue
+            d = float(np.linalg.norm(w - np.asarray(anchor, dtype=np.float64)))
+            if d <= max_dist:
+                pairs.append((d, i, side))
+    out = {"left": None, "right": None}
+    used = set()
+    for d, i, side in sorted(pairs):
+        if i in used or out[side] is not None:
+            continue
+        out[side] = hands[i]
+        used.add(i)
+    return out

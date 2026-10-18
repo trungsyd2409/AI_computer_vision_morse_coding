@@ -116,6 +116,20 @@ class MorseComposer:
         self._space_pending = event.kind == EventKind.LETTER
         return event
 
+    def add_space(self) -> list:
+        """
+        Gesture for a word break: finish any letter still in progress, then
+        add one space. Returns the events in the order they happened.
+        """
+        events = []
+        if self.code:
+            events.append(self.end_letter())
+        self._space_pending = False
+        space = self._insert_space()
+        if space is not None:
+            events.append(space)
+        return events
+
     # -- pauses ----------------------------------------------------------------
 
     def update(self, pause: float) -> list:

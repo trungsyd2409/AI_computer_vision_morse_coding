@@ -3,8 +3,8 @@ Wrapper around MediaPipe's Pose Landmarker (Tasks API).
 
 For every frame MediaPipe returns 33 body landmarks. Only the arms matter
 here: shoulder, elbow, wrist and three hand points per side. From them
-this module measures the elbow angle of each arm, the way a coach would
-watch a dumbbell curl:
+this module measures the forearm tilt of each arm (used for typing, see
+`arm_gestures`) and the elbow angle:
 
     shoulder
        \\        upper arm (humerus)
@@ -38,6 +38,7 @@ from typing import Optional
 
 import numpy as np
 
+from .arm_gestures import forearm_angle
 from .config import POSE_MODEL_PATH, POSE_MODEL_URL
 
 # MediaPipe pose indices: (shoulder, elbow, wrist, pinky, index, thumb)
@@ -86,6 +87,9 @@ class ArmPose:
     curl: float                  # 0 (straight) .. 1 (fully curled)
     # Normalised image (x, y) of shoulder, elbow, wrist, pinky, index, thumb
     points: list = field(default_factory=list)
+    # Forearm (elbow -> wrist) against the horizontal of the image, in
+    # degrees: 0 = level, +45 = raised diagonally, -45 = lowered diagonally.
+    forearm: float = 0.0
 
 
 @dataclass
@@ -139,7 +143,8 @@ class ArmTracker:
 
         def arm(ids) -> Optional[ArmPose]:
             s, e, wr = ids[:3]
-            if min(_visibility(lm[i]) for i in (s, e, wr)) < MIN_VISIBILITY:
+            # Only the forearm drives input, so the shoulder may be hidden.
+            if min(_visibility(lm[i]) for i in (e, wr)) < MIN_VISIBILITY:
                 return None
             if world is not None:
                 pts = [(world[i].x, world[i].y, world[i].z) for i in (s, e, wr)]
@@ -147,8 +152,11 @@ class ArmTracker:
                 # Pixel units, so the image aspect ratio does not bend the angle.
                 pts = [(lm[i].x * w, lm[i].y * h) for i in (s, e, wr)]
             angle = elbow_angle(*pts)
-            return ArmPose(angle, curl_from_angle(angle),
-                           [(lm[i].x, lm[i].y) for i in ids])
+            # The forearm tilt is what the user sees on screen, so it is
+            # measured on the image itself, in pixels.
+            tilt = forearm_angle((lm[e].x * w, lm[e].y * h), (lm[wr].x * w, lm[wr].y * h))
+            return ArmPose(angle=angle, curl=curl_from_angle(angle),
+                           points=[(lm[i].x, lm[i].y) for i in ids], forearm=tilt)
 
         def wrist(i):
             return (lm[i].x, lm[i].y) if _visibility(lm[i]) >= 0.3 else None
