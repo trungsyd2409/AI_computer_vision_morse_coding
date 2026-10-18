@@ -103,6 +103,9 @@ class BodyResult:
     # even when the rest of the arm is hidden: the app uses it to decide
     # which detected hand belongs to which side of the body.
     wrists: dict = field(default_factory=lambda: {"left": None, "right": None})
+    # Normalised image (x, y) of each shoulder, or None. Shoulder width is
+    # the yardstick for "hands together", so it works at any distance.
+    shoulders: dict = field(default_factory=lambda: {"left": None, "right": None})
 
 
 class ArmTracker:
@@ -169,12 +172,15 @@ class ArmTracker:
 
         result = build_result(arm(MP_LEFT_ARM), arm(MP_RIGHT_ARM), mirrored, swap_arms)
         mp_wrists = (wrist(MP_LEFT_ARM[2]), wrist(MP_RIGHT_ARM[2]))
+        mp_shoulders = (wrist(MP_LEFT_ARM[0]), wrist(MP_RIGHT_ARM[0]))
         # Apply the same left/right swap to the wrists as to the arms.
         user_left_is_mp_left = (not mirrored) != swap_arms
         if user_left_is_mp_left:
             result.wrists = {"left": mp_wrists[0], "right": mp_wrists[1]}
+            result.shoulders = {"left": mp_shoulders[0], "right": mp_shoulders[1]}
         else:
             result.wrists = {"left": mp_wrists[1], "right": mp_wrists[0]}
+            result.shoulders = {"left": mp_shoulders[1], "right": mp_shoulders[0]}
         return result
 
     def close(self) -> None:

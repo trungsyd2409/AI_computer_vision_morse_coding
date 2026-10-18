@@ -4,7 +4,8 @@ import unittest
 
 import numpy as np
 
-from blink_morse.arm_gestures import TiltKey, ZoneKey, forearm_angle, x_axis_angle
+from blink_morse.arm_gestures import (TiltKey, TogetherSwitch, ZoneKey, forearm_angle,
+                                      mirror_angle, together_ratio, x_axis_angle)
 from blink_morse.config import ArmSettings
 from blink_morse.hand_tracker import FistGate, assign_hands
 from blink_morse.morse import MorseComposer
@@ -109,7 +110,7 @@ class ZoneKeyTest(unittest.TestCase):
 class GestureFlowTest(unittest.TestCase):
     def test_spell_a_word(self):
         """dot dash, end letter, dash dot dot, space -> 'AD '"""
-        sym, ctl = ZoneKey(), TiltKey()
+        sym, ctl = ZoneKey(), ZoneKey()
         c = MorseComposer()
         t = 0.0
         for key, angle in [(sym, LEVEL), (ctl, LEVEL),
@@ -133,6 +134,39 @@ class GestureFlowTest(unittest.TestCase):
         self.assertEqual((s.symbol_side, s.control_side), ("left", "right"))
         s.symbol_side = "right"
         self.assertEqual(s.control_side, "left")
+
+
+class SwitchTest(unittest.TestCase):
+    def test_mirror(self):
+        self.assertAlmostEqual(mirror_angle(135), 45)
+        self.assertAlmostEqual(mirror_angle(-135), -45)
+        self.assertAlmostEqual(mirror_angle(0), 180)
+        self.assertAlmostEqual(mirror_angle(90), 90)
+
+    def test_ratio(self):
+        sh = {"left": (0.4, 0.3), "right": (0.6, 0.3)}            # 0.2 wide
+        self.assertAlmostEqual(together_ratio({"left": (0.49, 0.5), "right": (0.51, 0.5)},
+                                              sh, (100, 100)), 0.1)
+        self.assertIsNone(together_ratio({"left": None, "right": (0.5, 0.5)}, sh, (100, 100)))
+
+    def test_flip_once_per_touch(self):
+        sw = TogetherSwitch()
+        flips = []
+        t = 0.0
+        for value, sec in [(1.0, 0.3), (0.2, 0.5), (1.0, 0.4), (0.2, 0.3), (0.5, 0.3), (0.2, 0.3)]:
+            for _ in range(round(sec * FPS)):
+                if sw.update(value, t):
+                    flips.append(sw.on)
+                t += 1 / FPS
+        # on, then off; 0.5 is not far enough apart to re-arm, so no third flip
+        self.assertEqual(flips, [True, False])
+
+    def test_quick_brush_does_not_flip(self):
+        sw = TogetherSwitch()
+        t = 0.0
+        for value in [1.0] * 5 + [0.2] * 2 + [1.0] * 5:      # 2 frames < 0.15 s
+            self.assertFalse(sw.update(value, t))
+            t += 1 / FPS
 
 
 class HandsTest(unittest.TestCase):

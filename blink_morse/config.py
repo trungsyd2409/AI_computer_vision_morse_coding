@@ -26,7 +26,7 @@ FACE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/latest/face_landmarker.task"
 )
-# Hand model used to read the open hand / fist that switches typing on.
+# Hand model, used to draw the hand skeletons.
 HAND_MODEL_PATH = MODELS_DIR / "hand_landmarker.task"
 HAND_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
@@ -88,7 +88,7 @@ class CameraSettings:
     index: int = 0
     width: int = 640
     height: int = 480
-    fps: int = 60
+    fps: int = 30                 # 60 is not offered by many cameras
     mirror: bool = True
     auto_exposure: bool = True
     # Image controls. None means "keep whatever the driver uses", so a fresh
@@ -98,41 +98,37 @@ class CameraSettings:
     brightness: Optional[float] = None
     contrast: Optional[float] = None
     gain: Optional[float] = None
+    # Index of the capture mode (backend / format) that last gave a picture,
+    # so the next start does not wait on modes that hang. 0 = best first.
+    mode_hint: int = 0
 
 
 @dataclass
 class ArmSettings:
     """
-    Forearm angles that make up the gestures.
+    Gestures, all read from the forearm (elbow -> wrist) angle against the
+    screen's X axis. The right arm's angle is mirrored, so for both arms
+    +45 means "hand raised diagonally towards the body".
 
-    The angle is measured on the camera image, along the forearm (elbow to
-    wrist), against the horizontal: 0 = level, +45 = hand raised
-    diagonally, -45 = hand lowered diagonally.
+    Both hands together:   typing on / off
+    Symbol arm (left):     up zone = dash,          down zone = dot
+    Control arm (right):   up zone = end of letter, down zone = space
 
-    Symbol arm (left by default):   forearm angle against the X axis,
-                                    35..145 = dash, -135..-35 = dot, typed
-                                    the moment it enters the zone
-    Control arm (right by default): hold a fist to type at all;
-                                    +45 = end of letter, -45 = space
-    The control arm has to come back to level before its next gesture.
-    The symbol arm only has to leave the zone before the next symbol.
+    Each gesture fires on the first frame inside its zone; the arm has to
+    leave the zone before that arm can fire again.
     """
 
-    # Dot / dash arm, angle against the screen X axis (-180..180 degrees).
-    dash_min: float = 35.0
+    dash_min: float = 35.0            # up zone
     dash_max: float = 145.0
-    dot_min: float = -135.0
+    dot_min: float = -135.0           # down zone
     dot_max: float = -35.0
     # Degrees past the zone edge before the arm counts as having left it.
     exit_margin: float = 5.0
-    # Control arm: the diagonal to aim for (end of letter / space).
-    angle_target: float = 45.0
-    angle_tolerance: float = 20.0     # +/- around the target that still counts
-    neutral_band: float = 15.0        # |angle| below this counts as level
-    hold_time: float = 0.10           # control arm: seconds a pose must be held
+    # Wrists closer than this x shoulder width = hands together.
+    together_ratio: float = 0.35
     swap_arms: bool = False           # fixes cameras that mirror the image
-    # Which arm types dots and dashes. The other one holds the fist and
-    # ends letters / adds spaces. S swaps the two roles.
+    # Which arm types dots and dashes. The other one ends letters and adds
+    # spaces. S swaps the two roles.
     symbol_side: str = "left"
 
     @property

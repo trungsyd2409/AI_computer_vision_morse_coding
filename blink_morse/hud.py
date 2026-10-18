@@ -7,10 +7,11 @@ plain dark backdrop. No glow, no glass, no animated pop-ups.
 
 On screen:
 * Arm bones (shoulder - elbow - wrist) for both arms.
-* A 21-point skeleton for both hands. The control hand turns amber while
-  it holds the fist that allows typing.
-* A forearm turns amber while it sits on a diagonal that will type, and
+* A 21-point skeleton for both hands. Both turn amber while they are held
+  together (the gesture that switches typing on and off).
+* A forearm turns amber while it is in a zone that has already fired, and
   flashes thicker for a moment when its gesture fires.
+* "on" / "off" at the right end of the bottom strip.
 * Morse chart in the top-right corner.
 * Code being typed and the message, in a strip at the bottom.
 """
@@ -46,9 +47,8 @@ class HudState:
 
     camera_error: Optional[str] = None
     body: bool = False
-    armed: bool = False                  # control fist held and not paused
-    fist: bool = False                   # control hand is a fist
-    control_visible: bool = False
+    armed: bool = False                  # typing switched on and not paused
+    together: bool = False               # hands held together right now
     paused: bool = False
     symbol_side: str = "left"
     control_side: str = "right"
@@ -112,6 +112,8 @@ class Hud:
 
         self._flash = {"left": -10.0, "right": -10.0}
         self._invalid = (-10.0, "")
+        self._switch = -10.0
+        self._now = 0.0
 
     # ------------------------------------------------------------------------
     # Event hooks (called by the app)
@@ -120,6 +122,9 @@ class Hud:
     def on_gesture(self, side: str, now: float) -> None:
         if side in self._flash:
             self._flash[side] = now
+
+    def on_switch(self, on: bool, now: float) -> None:
+        self._switch = now
 
     def on_invalid(self, code: str, now: float) -> None:
         self._invalid = (now, code)
@@ -130,6 +135,7 @@ class Hud:
 
     def draw(self, state: HudState, now: float, visible: bool = True) -> None:
         self.ui.fill(UI_CLEAR)
+        self._now = now
         if not visible:
             return
         segments, joints = [], []
@@ -187,13 +193,8 @@ class Hud:
     # ------------------------------------------------------------------------
 
     def _live_zone(self, state: HudState, side: str) -> bool:
-        """
-        Control arm: on a diagonal that will type once it is held.
-        Dot / dash arm: inside a zone that has already been typed.
-        """
-        if side == state.symbol_side:
-            return state.latched.get(side) is not None
-        return state.armed and state.ready.get(side) and state.zone.get(side) in ("up", "down")
+        """Inside a zone that has already fired, waiting for the arm to leave."""
+        return state.latched.get(side) is not None
 
     def _arm_shapes(self, state: HudState, side: str, now: float,
                     segments: list, joints: list) -> None:
@@ -214,7 +215,7 @@ class Hud:
         pts = state.hands.get(side)
         if not pts:
             return
-        if side == state.control_side and state.fist:
+        if state.together or self._now - self._switch < 0.4:
             color = ACCENT
         else:
             color = draw.with_alpha(BONE, 0.8 if state.armed else 0.5)
@@ -237,13 +238,10 @@ class Hud:
         role = "symbol" if side == state.symbol_side else "control"
         zone = state.zone.get(side)
         name = self.ZONE_NAMES[role].get(zone, "-")
-        if role == "symbol":
-            # Amber + "ok" once the symbol in this zone has been typed.
-            done = state.latched.get(side) is not None
-            name += " ok" if done else ""
-            color = ACCENT if done else TEXT
-        else:
-            color = ACCENT if zone in ("up", "down") else TEXT
+        # Amber + "ok" once the gesture in this zone has fired.
+        done = state.latched.get(side) is not None
+        name += " ok" if done else ""
+        color = ACCENT if done else TEXT
         label = self.text("mono", 14, f"{angle:+4.0f}\u00b0 {name}", color)
 
         # Beside the elbow, on the side away from the body.
@@ -345,11 +343,18 @@ class Hud:
             else:
                 hint, color = "no match", DANGER
             self.blit(self.text("medium", 13, hint, color), (x + 6, cy), "midleft")
-        elif state.paused:
-            self.blit(self.text("regular", 12, "paused (P)", TEXT_MUTED), (x0, cy), "midleft")
         elif not state.armed:
-            self.blit(self.text("regular", 12, f"hold a {state.control_side} fist to type",
+            self.blit(self.text("regular", 12, "put both hands together to start",
                                 TEXT_MUTED), (x0, cy), "midleft")
+
+        # Typing switch state, right end of line 1.
+        if state.paused:
+            status, scol = "paused", TEXT_MUTED
+        elif state.armed:
+            status, scol = "on", ACCENT
+        else:
+            status, scol = "off", TEXT_MUTED
+        self.blit(self.text("medium", 12, status, scol), (r.right - 12, cy), "midright")
 
         # Line 2: the message, keeping its end visible when it gets long.
         ty = r.y + 42
@@ -369,10 +374,10 @@ class Hud:
 
     def _draw_camera_error(self, state: HudState) -> None:
         w, h = self.size
-        box = pygame.Rect(0, 0, 300, 54)
+        title = self.text("medium", 14, state.camera_error, TEXT)
+        box = pygame.Rect(0, 0, min(w - 2 * MARGIN, max(300, title.get_width() + 32)), 54)
         box.center = (w // 2, h // 2 - 40)
         draw.rounded_rect(self.ui, BACKDROP, box, 4)
-        self.blit(self.text("medium", 14, state.camera_error, TEXT),
-                  (box.centerx, box.y + 18), "center")
+        self.blit(title, (box.centerx, box.y + 18), "center")
         self.blit(self.text("regular", 11, "Press X to choose another camera", TEXT_MUTED),
                   (box.centerx, box.y + 38), "center")

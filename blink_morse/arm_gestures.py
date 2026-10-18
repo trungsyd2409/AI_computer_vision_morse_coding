@@ -19,8 +19,9 @@ Rules that keep it from typing by accident:
 * Angles outside every zone (an arm hanging straight down is about -90)
   do nothing and do not count as level either.
 
-`TiltKey` is used for the control arm (up = end of letter, down = space).
-The dot / dash arm uses `ZoneKey` below, which reacts instantly.
+`TiltKey` is no longer used by the app. Both arms use `ZoneKey` below,
+which reacts instantly; typing is switched on and off with
+`TogetherSwitch` (both hands together).
 """
 
 import math
@@ -111,7 +112,8 @@ class TiltKey:
 
 class ZoneKey:
     """
-    Instant key for the dot / dash arm, driven by the X-axis angle.
+    Instant key for one arm, driven by the X-axis angle. Symbol arm:
+    up = dash, down = dot. Control arm: up = end of letter, down = space.
 
         dash zone: 35 .. 145 deg   (forearm pointing up, either way)
         dot zone : -135 .. -35 deg (forearm pointing down, either way)
@@ -122,7 +124,8 @@ class ZoneKey:
       leaves that zone. Leaving it (by more than `margin` degrees, so tracking
       noise at the edge does not type twice) makes the key ready again.
     * If the forearm is already inside a zone when the key starts (arm just
-      came into view, or the fist just closed), it is latched without typing.
+      came into view, or typing was just switched on), it is latched without
+      typing.
     """
 
     UP = "up"
@@ -184,3 +187,94 @@ class ZoneKey:
             self._primed = True
             return None
         return zone
+
+
+def mirror_angle(angle: float) -> float:
+    """
+    Mirror an X-axis angle left <-> right (0 <-> 180, 45 <-> 135, -45 <-> -135).
+    The right arm's angle is mirrored so that both arms read the same number
+    for the same pose: hand raised diagonally towards the body = +45.
+    """
+    a = 180.0 - angle
+    return a - 360.0 if a > 180.0 else a
+
+
+def together_ratio(wrists: dict, shoulders: dict, size) -> Optional[float]:
+    """
+    Distance between the two wrists divided by shoulder width (both in image
+    pixels). About 0.2-0.4 with the palms pressed together, about 1 or more
+    with the arms apart. None if a wrist or a shoulder is not visible.
+    """
+    w, h = size
+    pts = [wrists.get("left"), wrists.get("right"),
+           shoulders.get("left"), shoulders.get("right")]
+    if any(p is None for p in pts):
+        return None
+    (wlx, wly), (wrx, wry), (slx, sly), (srx, sry) = [(p[0] * w, p[1] * h) for p in pts]
+    shoulder = math.hypot(slx - srx, sly - sry)
+    if shoulder < 1e-6:
+        return None
+    return math.hypot(wlx - wrx, wly - wry) / shoulder
+
+
+class TogetherSwitch:
+    """
+    On / off switch: bring both hands together to flip it.
+
+    * Hands count as together when the wrists are closer than `ratio` x
+      shoulder width for `hold` seconds; then the switch flips once.
+    * They must then move apart (wider than `release` x shoulder width) for
+      `release_time` seconds before the next flip, so holding the hands
+      together, or tracking noise, never flips it twice.
+    """
+
+    def __init__(self, ratio: float = 0.35, release: float = 0.6,
+                 hold: float = 0.15, release_time: float = 0.2):
+        self.ratio = ratio
+        self.release = release
+        self.hold = hold
+        self.release_time = release_time
+
+        self.on = False
+        self.together = False          # hands close right now (for the HUD)
+        self.value: Optional[float] = None
+        self._latched = False          # flipped, waiting for the hands to part
+        self._close_since: Optional[float] = None
+        self._apart_since: Optional[float] = None
+
+    def reset(self) -> None:
+        self.on = False
+        self.together = False
+        self._latched = False
+        self._close_since = self._apart_since = None
+
+    def update(self, value: Optional[float], now: float) -> bool:
+        """Feed one frame; returns True on the frame the switch flips."""
+        self.value = value
+        if value is None:
+            self.together = False
+            self._close_since = None
+            return False
+        self.together = value < self.ratio
+
+        if self._latched:
+            if value > max(self.release, self.ratio):
+                if self._apart_since is None:
+                    self._apart_since = now
+                if now - self._apart_since >= self.release_time:
+                    self._latched = False
+            else:
+                self._apart_since = None
+            return False
+
+        if not self.together:
+            self._close_since = None
+            return False
+        if self._close_since is None:
+            self._close_since = now
+        if now - self._close_since < self.hold:
+            return False
+        self.on = not self.on
+        self._latched = True
+        self._close_since = self._apart_since = None
+        return True

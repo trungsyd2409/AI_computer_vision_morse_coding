@@ -189,19 +189,13 @@ class SettingsWindow:
             "arm": page([
                 Slider("Exit margin", "arm", "exit_margin",
                        arm.get("exit_margin", 5.0), 0, 15, 1, "{:.0f}\u00b0"),
-                Slider("End / space angle", "arm", "angle_target",
-                       arm["angle_target"], 25, 65, 1, "{:.0f}\u00b0"),
-                Slider("Angle tolerance", "arm", "angle_tolerance",
-                       arm["angle_tolerance"], 5, 30, 1, "\u00b1{:.0f}\u00b0"),
-                Slider("Level band", "arm", "neutral_band",
-                       arm["neutral_band"], 5, 25, 1, "\u00b1{:.0f}\u00b0"),
-                Slider("End / space hold", "arm", "hold_time",
-                       arm["hold_time"], 0.0, 0.40, 0.02, "{:.2f} s"),
+                Slider("Hands together", "arm", "together_ratio",
+                       arm.get("together_ratio", 0.35), 0.15, 0.80, 0.01, "{:.2f}\u00d7"),
                 Segmented("Dot / dash arm (S)", "arm", "symbol_side",
                           [("Left arm", "left"), ("Right arm", "right")],
                           arm.get("symbol_side", "left")),
                 Toggle("Swap left / right arm", "arm", "swap_arms", arm["swap_arms"]),
-            ], row_h=29),
+            ]),
         }
 
         footer_y = SETTINGS_SIZE[1] - PAD - 36
@@ -256,6 +250,12 @@ class SettingsWindow:
             clock.tick(60)
 
     def _enabled(self, widget) -> bool:
+        if getattr(widget, "unsupported", False):
+            return False
+        if getattr(widget, "key", None) == "auto_exposure":
+            exposure = next((w for w in self.pages["camera"]
+                             if getattr(w, "key", None) == "exposure"), None)
+            return not (exposure is not None and exposure.unsupported)
         if getattr(widget, "key", None) == "exposure":
             return not self.values["camera"]["auto_exposure"]
         return True
@@ -313,7 +313,9 @@ class SettingsWindow:
         s.blit(self._text("semibold", 19, SETTINGS_TITLE, TEXT), (PAD, 22))
         # The subtitle doubles as the place for camera errors.
         error = self.stats.get("error")
-        subtitle = (error, DANGER) if error else ("Changes apply instantly", TEXT_MUTED)
+        backend = self.stats.get("backend", "")
+        mode = f"Camera mode: {backend}" if backend and backend != "-" else "Changes apply instantly"
+        subtitle = (error, DANGER) if error else (mode, TEXT_MUTED)
         s.blit(self._text("regular", 12, *subtitle), (PAD, 48))
 
         # Live stats card
@@ -336,10 +338,6 @@ class SettingsWindow:
             x = card.x + 16 + i * col_w
             s.blit(self._text("regular", 11, label, TEXT_FAINT), (x, card.y + 12))
             s.blit(self._text("semibold", 16, value, color), (x, card.y + 30))
-        backend = self.stats.get("backend", "")
-        if backend and backend != "-":
-            img = self._text("regular", 11, backend, TEXT_FAINT)
-            s.blit(img, img.get_rect(topright=(card.right - 14, card.y + 12)))
 
         for widget in self.widgets:
             enabled = self._enabled(widget)
@@ -354,7 +352,6 @@ class SettingsWindow:
         from . import draw
         s = self.screen
         arm = self.values["arm"]
-        a = arm["angle_target"]
         dash = (arm.get("dash_min", 35.0), arm.get("dash_max", 145.0))
         dot = (arm.get("dot_min", -135.0), arm.get("dot_max", -35.0))
         sym = arm.get("symbol_side", "left")
@@ -367,11 +364,11 @@ class SettingsWindow:
         s.blit(self._label("Gestures"), (card.x + 14, card.y + 10))
 
         rows = [
-            (f"{ctl.capitalize()} fist", "hold to type"),
+            ("Both hands together", "typing on / off"),
             (f"{sym.capitalize()} {dash[0]:.0f}\u00b0 to {dash[1]:.0f}\u00b0", "dash"),
             (f"{sym.capitalize()} {dot[0]:.0f}\u00b0 to {dot[1]:.0f}\u00b0", "dot"),
-            (f"{ctl.capitalize()} forearm +{a:.0f}\u00b0", "end letter"),
-            (f"{ctl.capitalize()} forearm -{a:.0f}\u00b0", "space"),
+            (f"{ctl.capitalize()} {dash[0]:.0f}\u00b0 to {dash[1]:.0f}\u00b0", "end letter"),
+            (f"{ctl.capitalize()} {dot[0]:.0f}\u00b0 to {dot[1]:.0f}\u00b0", "space"),
         ]
         for i, (pose, action) in enumerate(rows):
             cy = card.y + 30 + i * 16
@@ -434,14 +431,17 @@ class Slider(Widget):
         # None means the driver value is not known yet; the "props" message
         # from the main window fills it in a moment later.
         self.value = float(value) if value is not None else (lo + hi) / 2
-
+        self.unsupported = False     # the camera has no such control
     def _track(self):
         x0 = self.rect.x + self.TRACK_X
         x1 = self.rect.right - self.VALUE_W
         return x0, x1
 
-    def adopt(self, driver_value: float) -> None:
+    def adopt(self, driver_value) -> None:
         """Take the value the camera driver reports, widening the range if needed."""
+        self.unsupported = driver_value is None
+        if driver_value is None:
+            return
         if driver_value < self.lo:
             self.lo = math.floor(driver_value)
         if driver_value > self.hi:
@@ -473,8 +473,8 @@ class Slider(Widget):
         win.pg.draw.rect(surface, accent, (x0, cy - 2, max(kx - x0, 0), 4), border_radius=2)
         draw.circle(surface, (245, 247, 252) if enabled else TEXT_FAINT, (kx, cy), 7)
         draw.ring(surface, accent, (kx, cy), 7, 2)
-        img = win._text("medium", 12, self.fmt.format(self.value),
-                        TEXT_MUTED if enabled else TEXT_FAINT)
+        text = "n/a" if self.unsupported else self.fmt.format(self.value)
+        img = win._text("medium", 12, text, TEXT_MUTED if enabled else TEXT_FAINT)
         surface.blit(img, img.get_rect(midright=(self.rect.right, cy)))
 
 

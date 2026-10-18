@@ -1,6 +1,6 @@
 # Arm Morse
 
-Type Morse code with your forearms in front of a webcam. Hold a **right-hand fist** to type. Point the **left forearm** up for a dash or down for a dot; it types the instant it enters the zone. Tilt the **right forearm** (still in a fist) up 45° to end the letter or down 45° to add a space. The app reads the forearm angles with MediaPipe Pose, the fist with MediaPipe Hands, and draws the arm bones and both hand skeletons on the camera image.
+Type Morse code with your forearms in front of a webcam. Put **both hands together** to switch typing on or off. Then each forearm fires a gesture the moment it points into a zone: the **left forearm** up for a dash, down for a dot; the **right forearm** up to end the letter, down to add a space. The app reads the arms with MediaPipe Pose and draws the arm bones and both hand skeletons (MediaPipe Hands) on the camera image.
 
 ---
 
@@ -59,33 +59,33 @@ The tests cover the Morse logic, the blink detector and the left/right eye mappi
 
 ## How to use it
 
-Stand or sit so that both **elbows, wrists and hands** are in view.
+Stand or sit so that both **shoulders, elbows and wrists** are in view.
 
-The angle that counts is the **forearm** (elbow to wrist) against the horizontal of the screen: 0° is level, +45° is the hand raised diagonally, -45° is the hand lowered diagonally.
+**Switch typing on / off: both hands together.** Bring your hands together (palms touching, wrists closer than 0.35 x your shoulder width) for about 0.15 s. The hand skeletons flash amber and the bottom strip shows `on` or `off`. Move the hands apart before the next switch. Nothing is typed while the hands are together.
 
-| Arm | Pose | Result |
+**Angles.** The angle is the forearm vector (elbow to wrist) against the screen's X axis: right = 0°, up = 90°, down = -90°. The right arm's angle is mirrored, so for both arms +45° means "hand raised diagonally towards the body" and level towards the body is 0°.
+
+| Arm | Angle enters | Result |
 |---|---|---|
-| **Right hand** | Fist, held | Typing allowed. Open hand or hand out of view = nothing is typed. The hand skeleton turns amber while the fist is held |
-| **Left forearm** | Angle against the X axis enters 35° to 145° (pointing up) | Dash `-` |
-| **Left forearm** | Angle against the X axis enters -135° to -35° (pointing down) | Dot `.` |
-| **Right forearm** (fist) | +45° (up) | End of letter: the code is turned into a letter |
-| **Right forearm** (fist) | -45° (down) | Space (ends the letter first if one is still open) |
+| **Left forearm** | 35° to 145° (up) | Dash `-` |
+| **Left forearm** | -135° to -35° (down) | Dot `.` |
+| **Right forearm** | 35° to 145° (up) | End of letter: the code becomes a letter |
+| **Right forearm** | -135° to -35° (down) | Space (ends the letter first if one is open) |
 
-**Left arm: instant zones.** The angle is the forearm vector (elbow to wrist) against the screen's X axis: right = 0°, up = 90°, left = 180°, down = -90°. The first frame inside a zone types the symbol, with no hold time, so fast movements are caught. The arm is then marked as detected and types nothing more until it leaves that zone (by more than the *exit margin*, 5° by default, so tracking noise at the edge cannot type twice). It does not have to return to level: going straight from the dash zone to the dot zone types a dash and then a dot. If the arm is already inside a zone when the fist closes, nothing is typed until it leaves.
+**Instant zones.** The first frame inside a zone fires the gesture, with no hold time, so fast movements are caught. That arm is then marked as detected and fires nothing more until it leaves the zone (by more than the *exit margin*, 5° by default, so tracking noise at the edge cannot fire twice). It does not have to return to level: going straight from the up zone to the down zone fires both. If an arm is already in a zone when typing is switched on, it fires only after leaving and coming back.
 
-**Right arm: diagonals.** The right forearm has to be near ±45° (against the horizontal) and held for the *hold time* (0.10 s) to end a letter or add a space, then come back to level before its next gesture. Letting it hang straight down (about -90°) does nothing.
-
-**Feedback.** The left forearm turns amber while it is in a zone that has already been typed. The right forearm turns amber while it sits on a diagonal that will type. Both flash thicker when a gesture fires. Press **H** to show each forearm's angle next to the elbow (left arm: X-axis angle with `dash`, `dot`, `ok` once typed; right arm: angle against the horizontal with `end`, `space`, `level`). The bottom strip shows the code typed so far, the letter it decodes to (or the letters still reachable), and the message. The Morse chart in the top-right corner dims letters that the current code can no longer reach.
+**Feedback.** A forearm turns amber while it is in a zone that has already fired, and flashes thicker when its gesture fires. Press **H** to show each forearm's angle next to the elbow with the zone name (`dash`, `dot`, `end`, `space`), plus `ok` once it has fired. The bottom strip shows the code typed so far, the letter it decodes to (or the letters still reachable), the message, and the switch state. The Morse chart in the top-right corner dims letters the current code can no longer reach.
 
 **Example: typing "HI"**
 
-1. Make a right fist with the right forearm level.
-2. Flick the left forearm down and back up out of the dot zone, four times (`....`).
-3. Right forearm up, then back to level. **H** is added.
-4. Two more flicks down (`..`), then right forearm up. **I** is added.
+1. Put both hands together. The strip shows `on`.
+2. Flick the left forearm down and back out of the dot zone, four times (`....`).
+3. Right forearm up, then back down to level. **H** is added.
+4. Two more flicks down with the left arm (`..`), then right forearm up. **I** is added.
 5. Right forearm down. A space is added.
+6. Hands together again to switch typing off.
 
-**Swap roles.** Press **S** (or *Dot / dash arm* in the Arm settings tab) to type dots and dashes with the right arm and hold the fist with the left hand. The choice is saved.
+**Swap roles.** Press **S** (or *Dot / dash arm* in the Arm settings tab) to type dots and dashes with the right arm and end letters / add spaces with the left. The choice is saved.
 
 Press **P** to pause typing while you rest, or **Z** to hide the interface and stop input completely. Deleting is done on the keyboard.
 
@@ -93,7 +93,7 @@ Press **P** to pause typing while you rest, or **Z** to hide the interface and s
 
 | Key | Action |
 |---|---|
-| `S` | Swap roles: which arm types dots and dashes, which hand holds the fist |
+| `S` | Swap roles: which arm types dots and dashes, which ends letters and adds spaces |
 | `X` | Open or close the settings window |
 | `Z` | Hide or show the interface. Hidden = normal camera colours and no typing |
 | `P` | Pause or resume typing |
@@ -116,21 +116,22 @@ Press `X` to open it. It has two tabs. Changes apply instantly and are saved to 
 - **Driver settings** (Windows) opens the camera maker's own settings dialog.
 
 **Arm tab**
-- **Exit margin**: how far past the edge of a dot / dash zone the left arm must go before it can type again (default 5°). The zones themselves (`dash_min`, `dash_max`, `dot_min`, `dot_max`) are in `settings.json`.
-- **End / space angle**: the angle the right forearm aims for to end a letter or add a space (25° to 65°, default 45°).
-- **Angle tolerance**: how far from that angle still counts (default ±20°, so 25° to 65°).
-- **Level band**: how close to 0° counts as level (default ±15°).
-- **End / space hold**: how long the right arm must hold its pose (0 to 0.40 s, default 0.10 s).
-- **Dot / dash arm (S)**: which arm types dots and dashes. The other hand holds the fist.
+- **Exit margin**: how far past the edge of a zone an arm must go before it can fire again (default 5°). The zones themselves (`dash_min`, `dash_max`, `dot_min`, `dot_max`) are in `settings.json`.
+- **Hands together**: how close the wrists must be, as a fraction of shoulder width (default 0.35).
+- **Dot / dash arm (S)**: which arm types dots and dashes. The other one ends letters and adds spaces.
 - **Swap left / right arm**: for cameras or phone apps that already mirror the image.
 
-A card under the controls lists every gesture with the current angle.
+A card under the controls lists every gesture with the current angles.
 
 ### Using an iPhone or Android phone as the camera
 
 A phone camera is usually much sharper than a laptop webcam, and sharper eyes make blinks easier to read. Install a "phone as webcam" app such as Camo, iVCam or EpocCam on both the phone and the PC, connect the phone by USB, and the phone shows up as an extra camera. In the settings window, step **Device** to the new camera (its name is shown on Windows). Put the phone at eye level and light your face from the front.
 
 ### Troubleshooting
+
+**Black screen or 0 camera FPS.** The app tries several capture modes in turn (DirectShow with MJPG, DirectShow with the driver's own format, 30 fps, the driver's default size, then Media Foundation). A mode that hangs for 3 s or sends only black frames for 2.5 s is skipped, and the one that works is remembered in `settings.json` (`mode_hint`). The mode in use is shown under the title of the settings window. Virtual cameras such as Camo send black frames or nothing at all while the phone is not connected in the Camo app.
+
+**Exposure / brightness / contrast / gain show "n/a".** The camera driver does not offer that control (virtual cameras like Camo have none of them). Change the picture in the camera's own app instead.
 
 | Problem | Fix |
 |---|---|
@@ -172,9 +173,9 @@ Think of the app as a small assembly line with five stations.
 
 2. **The body and hand readers find your arms.** Two pre-trained models from Google find your elbows and wrists, and the 21 points of each hand. Each hand is matched to the nearest wrist, so the app always knows which hand is the right one.
 
-3. **The fist check decides if you are typing.** If the right hand is closed (fingertips folded back near the knuckles) typing is allowed. Open the hand and nothing is typed.
+3. **The switch decides if you are typing.** Putting both hands together (wrists close compared with shoulder width) flips typing on or off.
 
-4. **The angle reader turns poses into keys.** For each forearm it measures the angle against the horizontal. Held at +45° or -45° for a moment, that is a gesture; the forearm then has to come back to level before the next one. Left arm: up = dash, down = dot. Right arm: up = end the letter, down = space. When a letter ends, the dots and dashes are looked up in the international Morse table; a code that does not exist is shown as "no match" instead of a guess.
+4. **The angle reader turns poses into keys.** For each forearm it measures the angle against the X axis (mirrored for the right arm). The moment the angle enters a zone, that is a gesture; the arm has to leave the zone before it can fire again. Left arm: up = dash, down = dot. Right arm: up = end the letter, down = space. When a letter ends, the dots and dashes are looked up in the international Morse table; a code that does not exist is shown as "no match" instead of a guess.
 
 5. **The screen shows the result.** The camera keeps its normal colours. Thin bones and hand skeletons show what the app sees, the Morse chart sits in the corner, and the code and message are in a small strip at the bottom. A short sound confirms every symbol, so you can type without looking.
 
@@ -273,9 +274,9 @@ AI_computer_vision_morse_coding/
 │   ├── config.py            constants, colours, saved settings
 │   ├── camera.py            threaded webcam reader
 │   ├── arm_tracker.py       MediaPipe Pose wrapper, forearm angle, arm mapping
-│   ├── arm_gestures.py      forearm tilt -> up / down gestures
+│   ├── arm_gestures.py      forearm angle zones, hands-together switch
 │   ├── curls.py             old curl detector (no longer used by the app)
-│   ├── hand_tracker.py      MediaPipe Hands wrapper, fist switch, hand-to-arm matching
+│   ├── hand_tracker.py      MediaPipe Hands wrapper, hand-to-arm matching
 │   ├── face_tracker.py      old face input (no longer used by the app)
 │   ├── blinks.py            old blink detector (no longer used by the app)
 │   ├── morse.py             Morse table and composer state machine
