@@ -59,9 +59,11 @@ class HudState:
     angle: dict = field(default_factory=lambda: {"left": None, "right": None})
     zone: dict = field(default_factory=lambda: {"left": None, "right": None})
     ready: dict = field(default_factory=lambda: {"left": False, "right": False})
+    latched: dict = field(default_factory=lambda: {"left": None, "right": None})
     code: str = ""
     text: str = ""
     show_chart: bool = True
+    show_angles: bool = True
 
 
 class Fonts:
@@ -135,6 +137,9 @@ class Hud:
             self._arm_shapes(state, side, now, segments, joints)
             self._hand_shapes(state, side, segments, joints)
         self._draw_shapes(segments, joints)
+        if state.show_angles:
+            for side in ("left", "right"):
+                self._draw_angle(state, side)
         if state.show_chart:
             self._draw_chart(state)
         self._draw_bottom(state, now)
@@ -182,7 +187,12 @@ class Hud:
     # ------------------------------------------------------------------------
 
     def _live_zone(self, state: HudState, side: str) -> bool:
-        """Forearm sits on a diagonal that will type once it is held."""
+        """
+        Control arm: on a diagonal that will type once it is held.
+        Dot / dash arm: inside a zone that has already been typed.
+        """
+        if side == state.symbol_side:
+            return state.latched.get(side) is not None
         return state.armed and state.ready.get(side) and state.zone.get(side) in ("up", "down")
 
     def _arm_shapes(self, state: HudState, side: str, now: float,
@@ -212,6 +222,44 @@ class Hud:
             segments.append((color, pts[a], pts[b], 1.5))
         for i in FINGERTIPS + (0,):
             joints.append((color, pts[i], 2))
+
+    ZONE_NAMES = {
+        "symbol": {"up": "dash", "down": "dot", "level": "level"},
+        "control": {"up": "end", "down": "space", "level": "level"},
+    }
+
+    def _draw_angle(self, state: HudState, side: str) -> None:
+        """Forearm angle and the zone it is in, next to the elbow (H key)."""
+        pts = state.arms.get(side)
+        angle = state.angle.get(side)
+        if not pts or angle is None:
+            return
+        role = "symbol" if side == state.symbol_side else "control"
+        zone = state.zone.get(side)
+        name = self.ZONE_NAMES[role].get(zone, "-")
+        if role == "symbol":
+            # Amber + "ok" once the symbol in this zone has been typed.
+            done = state.latched.get(side) is not None
+            name += " ok" if done else ""
+            color = ACCENT if done else TEXT
+        else:
+            color = ACCENT if zone in ("up", "down") else TEXT
+        label = self.text("mono", 14, f"{angle:+4.0f}\u00b0 {name}", color)
+
+        # Beside the elbow, on the side away from the body.
+        (sx, _), (ex, ey) = pts[0], pts[1]
+        out = -1 if side == "left" else 1
+        if abs(ex - sx) > 8:
+            out = 1 if ex > sx else -1
+        box = label.get_rect()
+        box.inflate_ip(12, 6)
+        if out > 0:
+            box.midleft = (round(ex + 12), round(ey))
+        else:
+            box.midright = (round(ex - 12), round(ey))
+        box.clamp_ip(pygame.Rect(0, 0, *self.size))
+        draw.rounded_rect(self.ui, BACKDROP, box, 3)
+        self.blit(label, box.center, "center")
 
     # ------------------------------------------------------------------------
     # Morse chart

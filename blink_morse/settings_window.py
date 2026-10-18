@@ -161,10 +161,10 @@ class SettingsWindow:
         self.tab_bar = TabBar(TABS, self.tab)
         self.tab_bar.rect = self.pg.Rect(PAD, 150, w, 34)
 
-        def page(widgets):
+        def page(widgets, row_h=ROW_H):
             y = 198
             for widget in widgets:
-                height = getattr(widget, "HEIGHT", ROW_H)
+                height = getattr(widget, "HEIGHT", row_h)
                 widget.rect = self.pg.Rect(PAD, y, w, height)
                 y += height + 2
             return widgets
@@ -187,19 +187,21 @@ class SettingsWindow:
                 Slider("Gain", "camera", "gain", cam["gain"], 0, 255, 1, "{:.0f}"),
             ]),
             "arm": page([
-                Slider("Diagonal angle", "arm", "angle_target",
+                Slider("Exit margin", "arm", "exit_margin",
+                       arm.get("exit_margin", 5.0), 0, 15, 1, "{:.0f}\u00b0"),
+                Slider("End / space angle", "arm", "angle_target",
                        arm["angle_target"], 25, 65, 1, "{:.0f}\u00b0"),
                 Slider("Angle tolerance", "arm", "angle_tolerance",
                        arm["angle_tolerance"], 5, 30, 1, "\u00b1{:.0f}\u00b0"),
                 Slider("Level band", "arm", "neutral_band",
                        arm["neutral_band"], 5, 25, 1, "\u00b1{:.0f}\u00b0"),
-                Slider("Hold time", "arm", "hold_time",
+                Slider("End / space hold", "arm", "hold_time",
                        arm["hold_time"], 0.0, 0.40, 0.02, "{:.2f} s"),
                 Segmented("Dot / dash arm (S)", "arm", "symbol_side",
                           [("Left arm", "left"), ("Right arm", "right")],
                           arm.get("symbol_side", "left")),
                 Toggle("Swap left / right arm", "arm", "swap_arms", arm["swap_arms"]),
-            ]),
+            ], row_h=29),
         }
 
         footer_y = SETTINGS_SIZE[1] - PAD - 36
@@ -353,24 +355,26 @@ class SettingsWindow:
         s = self.screen
         arm = self.values["arm"]
         a = arm["angle_target"]
+        dash = (arm.get("dash_min", 35.0), arm.get("dash_max", 145.0))
+        dot = (arm.get("dot_min", -135.0), arm.get("dot_max", -35.0))
         sym = arm.get("symbol_side", "left")
         ctl = "right" if sym == "left" else "left"
         last = self.pages["arm"][-1].rect
-        card = pg.Rect(PAD, last.bottom + 14, SETTINGS_SIZE[0] - 2 * PAD, 112)
+        card = pg.Rect(PAD, last.bottom + 8, SETTINGS_SIZE[0] - 2 * PAD, 104)
         layer = pg.Surface(card.size, pg.SRCALPHA)
         draw.rounded_rect(layer, (255, 255, 255, 12), layer.get_rect(), 6)
         s.blit(layer, card)
-        s.blit(self._label("Gestures (back to level between)"), (card.x + 14, card.y + 10))
+        s.blit(self._label("Gestures"), (card.x + 14, card.y + 10))
 
         rows = [
             (f"{ctl.capitalize()} fist", "hold to type"),
-            (f"{sym.capitalize()} forearm +{a:.0f}\u00b0", "dash"),
-            (f"{sym.capitalize()} forearm -{a:.0f}\u00b0", "dot"),
+            (f"{sym.capitalize()} {dash[0]:.0f}\u00b0 to {dash[1]:.0f}\u00b0", "dash"),
+            (f"{sym.capitalize()} {dot[0]:.0f}\u00b0 to {dot[1]:.0f}\u00b0", "dot"),
             (f"{ctl.capitalize()} forearm +{a:.0f}\u00b0", "end letter"),
             (f"{ctl.capitalize()} forearm -{a:.0f}\u00b0", "space"),
         ]
         for i, (pose, action) in enumerate(rows):
-            cy = card.y + 34 + i * 17
+            cy = card.y + 30 + i * 16
             img = self._text("medium", 12, pose, TEXT)
             s.blit(img, img.get_rect(midleft=(card.x + 14, cy)))
             img = self._text("regular", 12, action, TEXT_MUTED)

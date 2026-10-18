@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from blink_morse.arm_gestures import TiltKey, forearm_angle
+from blink_morse.arm_gestures import TiltKey, ZoneKey, forearm_angle, x_axis_angle
 from blink_morse.config import ArmSettings
 from blink_morse.hand_tracker import FistGate, assign_hands
 from blink_morse.morse import MorseComposer
@@ -70,10 +70,46 @@ class TiltKeyTest(unittest.TestCase):
         self.assertEqual(got, [])
 
 
+class ZoneKeyTest(unittest.TestCase):
+    def setUp(self):
+        self.k = ZoneKey()          # dash 35..145, dot -135..-35, margin 5
+
+    def test_x_axis_angle(self):
+        self.assertAlmostEqual(x_axis_angle((0, 0), (10, 0)), 0.0)
+        self.assertAlmostEqual(x_axis_angle((0, 0), (0, -10)), 90.0)   # up on screen
+        self.assertAlmostEqual(x_axis_angle((0, 0), (-10, 0)), 180.0)
+        self.assertAlmostEqual(x_axis_angle((0, 0), (0, 10)), -90.0)
+
+    def test_fires_on_first_frame(self):
+        play(self.k, [(0.2, 0)])
+        self.assertEqual(self.k.update(40, 1.0), "up")        # no hold time
+
+    def test_both_directions_count(self):
+        got, _ = play(self.k, [(0.2, 0), (0.1, 140), (0.1, 180), (0.1, -130), (0.1, 170),
+                                (0.1, -60), (0.1, 10), (0.1, 60)])
+        self.assertEqual(got, ["up", "down", "down", "up"])
+
+    def test_latched_until_it_leaves(self):
+        got, _ = play(self.k, [(0.2, 0), (0.5, 50), (0.5, 90), (0.2, 33), (0.2, 50)])
+        self.assertEqual(got, ["up"])          # 33 is inside the 5 deg exit margin
+        got, _ = play(self.k, [(0.2, 20), (0.2, 50)], 5.0)
+        self.assertEqual(got, ["up"])          # 20 left the zone, so it types again
+
+    def test_straight_from_dash_to_dot(self):
+        got, _ = play(self.k, [(0.2, 0), (1 / FPS, 90), (1 / FPS, -90)])
+        self.assertEqual(got, ["up", "down"])
+
+    def test_already_in_zone_at_start_types_nothing(self):
+        got, _ = play(self.k, [(0.3, 90)])
+        self.assertEqual(got, [])
+        got, _ = play(self.k, [(0.1, 0), (0.1, 90)], 5.0)
+        self.assertEqual(got, ["up"])
+
+
 class GestureFlowTest(unittest.TestCase):
     def test_spell_a_word(self):
         """dot dash, end letter, dash dot dot, space -> 'AD '"""
-        sym, ctl = TiltKey(), TiltKey()
+        sym, ctl = ZoneKey(), TiltKey()
         c = MorseComposer()
         t = 0.0
         for key, angle in [(sym, LEVEL), (ctl, LEVEL),

@@ -38,7 +38,7 @@ from typing import Optional
 
 import numpy as np
 
-from .arm_gestures import forearm_angle
+from .arm_gestures import forearm_angle, x_axis_angle
 from .config import POSE_MODEL_PATH, POSE_MODEL_URL
 
 # MediaPipe pose indices: (shoulder, elbow, wrist, pinky, index, thumb)
@@ -90,6 +90,9 @@ class ArmPose:
     # Forearm (elbow -> wrist) against the horizontal of the image, in
     # degrees: 0 = level, +45 = raised diagonally, -45 = lowered diagonally.
     forearm: float = 0.0
+    # Same forearm vector against the screen's X axis, -180..180 degrees:
+    # right = 0, up = 90, left = 180, down = -90. Used by the dot / dash arm.
+    forearm_x: float = 0.0
 
 
 @dataclass
@@ -154,9 +157,12 @@ class ArmTracker:
             angle = elbow_angle(*pts)
             # The forearm tilt is what the user sees on screen, so it is
             # measured on the image itself, in pixels.
-            tilt = forearm_angle((lm[e].x * w, lm[e].y * h), (lm[wr].x * w, lm[wr].y * h))
+            elbow_px = (lm[e].x * w, lm[e].y * h)
+            wrist_px = (lm[wr].x * w, lm[wr].y * h)
             return ArmPose(angle=angle, curl=curl_from_angle(angle),
-                           points=[(lm[i].x, lm[i].y) for i in ids], forearm=tilt)
+                           points=[(lm[i].x, lm[i].y) for i in ids],
+                           forearm=forearm_angle(elbow_px, wrist_px),
+                           forearm_x=x_axis_angle(elbow_px, wrist_px))
 
         def wrist(i):
             return (lm[i].x, lm[i].y) if _visibility(lm[i]) >= 0.3 else None

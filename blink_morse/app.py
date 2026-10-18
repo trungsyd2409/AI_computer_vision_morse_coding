@@ -8,9 +8,11 @@ Per frame:
   3. The control hand (right by default) must be held in a fist, otherwise
      nothing is typed.
   4. While it is a fist:
-       symbol arm  (left):  forearm +45 deg = dash, -45 deg = dot
+       symbol arm  (left):  forearm angle against the X axis enters
+                            35..145 = dash, -135..-35 = dot (instant; must
+                            leave the zone before the next symbol)
        control arm (right): forearm +45 deg = end of letter, -45 deg = space
-     Each arm has to come back to level before its next gesture counts.
+                            (back to level between gestures)
      S swaps the two roles.
   5. Draw the HUD (arm bones, hand skeletons, Morse chart, typed code and
      message) and let the GPU put it over the camera image.
@@ -26,7 +28,7 @@ import moderngl
 import numpy as np
 import pygame
 
-from .arm_gestures import TiltKey
+from .arm_gestures import TiltKey, ZoneKey
 from .arm_tracker import ArmTracker
 from .audio import SoundBank
 from .camera import CameraStream
@@ -71,7 +73,10 @@ class BlinkMorseApp:
         self.camera = CameraStream(self.settings.camera)
         self.camera.start()
 
-        self.keys = {side: TiltKey() for side in SIDES}
+        # Dot / dash arm: instant zones on the X-axis angle.
+        # Control arm: diagonal tilt, held briefly, back to level between.
+        self.symbol_key = ZoneKey()
+        self.control_key = TiltKey()
         self._apply_key_settings()
         self.composer = MorseComposer()
         self.settings_link = SettingsLink()
@@ -79,6 +84,7 @@ class BlinkMorseApp:
         self.paused = False               # P stops typing, e.g. to rest the arms
         self.ui_visible = True            # Z hides the UI and stops input
         self.show_chart = True
+        self.show_angles = True           # H: forearm angle readouts for debugging
         self.fps = 0.0
         self._frame_id = 0
         self._start = time.perf_counter()
@@ -152,6 +158,8 @@ class BlinkMorseApp:
                 self._reset_input()
                 self.sounds.play("pause" if self.paused else "resume")
             elif event.key == pygame.K_h:
+                self.show_angles = not self.show_angles
+            elif event.key == pygame.K_c:
                 self.show_chart = not self.show_chart
             elif event.key == pygame.K_m:
                 self.sounds.toggle()
@@ -161,10 +169,16 @@ class BlinkMorseApp:
                 self._apply_composer(self.composer.clear())
         return True
 
+    @property
+    def keys(self) -> dict:
+        """The key object watching each side, for the current roles."""
+        e = self.settings.arm
+        return {e.symbol_side: self.symbol_key, e.control_side: self.control_key}
+
     def _reset_input(self) -> None:
         self.gate.reset()
-        for key in self.keys.values():
-            key.reset()
+        self.symbol_key.reset()
+        self.control_key.reset()
 
     def _toggle_ui(self) -> None:
         self.ui_visible = not self.ui_visible
@@ -204,29 +218,38 @@ class BlinkMorseApp:
         armed = fist and not self.paused
 
         arms = {side: (None if body is None else getattr(body, side)) for side in SIDES}
-        for side in SIDES:
-            arm = arms[side]
-            angle = None if arm is None else arm.forearm
-            key = self.keys[side]
-            if not armed:
-                # Not typing: still show the angle, but forget any gesture,
-                # so after the fist closes each arm must pass level first.
-                key.reset()
-                key.angle = angle
-                if angle is not None:
-                    key.zone = key.zone_of(angle)
-                continue
+
+        # Dot / dash arm: angle against the X axis, typed on entering a zone.
+        arm = arms[symbol_side]
+        angle = None if arm is None else arm.forearm_x
+        key = self.symbol_key
+        if armed:
             gesture = key.update(angle, now)
-            if gesture is None:
-                continue
-            if side == symbol_side:
-                symbol = "-" if gesture == TiltKey.UP else "."
-                self._apply_composer(self.composer.add_symbol(symbol), side)
-            elif gesture == TiltKey.UP:
-                self._apply_composer(self.composer.end_letter(), side)
-            else:
+            if gesture is not None:
+                symbol = "-" if gesture == ZoneKey.UP else "."
+                self._apply_composer(self.composer.add_symbol(symbol), symbol_side)
+        else:
+            # Not typing: show the angle, forget any state, so an arm that
+            # is already in a zone when the fist closes types nothing.
+            key.reset()
+            key.angle = angle
+            key.zone = None if angle is None else key.zone_of(angle)
+
+        # Control arm: diagonal tilt, back to level between gestures.
+        arm = arms[control_side]
+        angle = None if arm is None else arm.forearm
+        key = self.control_key
+        if armed:
+            gesture = key.update(angle, now)
+            if gesture == TiltKey.UP:
+                self._apply_composer(self.composer.end_letter(), control_side)
+            elif gesture == TiltKey.DOWN:
                 for event in self.composer.add_space():
-                    self._apply_composer(event, side)
+                    self._apply_composer(event, control_side)
+        else:
+            key.reset()
+            key.angle = angle
+            key.zone = None if angle is None else key.zone_of(angle)
 
         self._update_points(arms, hands, frame_rgb.shape)
 
@@ -238,6 +261,9 @@ class BlinkMorseApp:
         state.angle = {side: self.keys[side].angle for side in SIDES}
         state.zone = {side: self.keys[side].zone for side in SIDES}
         state.ready = {side: self.keys[side].ready for side in SIDES}
+        # Dot / dash arm: zone already typed, waiting for the arm to leave it.
+        state.latched = {side: None for side in SIDES}
+        state.latched[symbol_side] = self.symbol_key.latched if armed else None
         self.compositor.update_camera(frame_rgb)
 
     def _update_points(self, arms: dict, hands: dict, shape) -> None:
@@ -340,11 +366,15 @@ class BlinkMorseApp:
 
     def _apply_key_settings(self) -> None:
         e = self.settings.arm
-        for key in self.keys.values():
-            key.target = e.angle_target
-            key.tolerance = e.angle_tolerance
-            key.neutral = e.neutral_band
-            key.hold_time = e.hold_time
+        k = self.control_key
+        k.target = e.angle_target
+        k.tolerance = e.angle_tolerance
+        k.neutral = e.neutral_band
+        k.hold_time = e.hold_time
+        k = self.symbol_key
+        k.dash = (min(e.dash_min, e.dash_max), max(e.dash_min, e.dash_max))
+        k.dot = (min(e.dot_min, e.dot_max), max(e.dot_min, e.dot_max))
+        k.margin = e.exit_margin
 
     def _reset_settings(self) -> None:
         index = self.settings.camera.index
@@ -389,6 +419,7 @@ class BlinkMorseApp:
         state.hands = {side: (None if p is None else [(float(x), float(y)) for x, y in p])
                        for side, p in self._hand_pts.items()}
         state.show_chart = self.show_chart
+        state.show_angles = self.show_angles
 
         self.hud.draw(state, now, self.ui_visible)
         self.compositor.update_ui(self.hud.ui)
