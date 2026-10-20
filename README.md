@@ -1,6 +1,6 @@
-# Arm Morse
+# Hip Morse
 
-Type Morse code with your forearms in front of a webcam. Put **both hands together** to switch typing on or off. Then each forearm fires a gesture the moment it points into a zone: the **left forearm** up for a dash, down for a dot; the **right forearm** up to end the letter, down to add a space. The app reads the arms with MediaPipe Pose and draws the arm bones and both hand skeletons (MediaPipe Hands) on the camera image.
+Type Morse code by swaying your hips in front of a webcam. Put **both hands together** to switch typing on or off. Then tilt your hips past an angle **A**: **right hip up** is a dash, **left hip up** is a dot. While the hips are inside the waiting zone (between -A and A), waiting longer than **t** ends the letter and waiting longer than **3t** adds a space. The app reads your body with MediaPipe Pose and draws the torso, legs, arms and both hand skeletons (MediaPipe Hands) on the camera image.
 
 ---
 
@@ -53,39 +53,41 @@ On the first launch the pose model (`pose_landmarker_lite.task`, about 5.5 MB) i
 python -m unittest discover -s tests -v
 ```
 
-The tests cover the Morse logic, the blink detector and the left/right eye mapping. They do not need a camera.
+The tests cover the Morse logic, the hip gesture logic, the hands-together switch and the left/right body mapping. They do not need a camera.
+
+---
 
 ---
 
 ## How to use it
 
-Stand or sit so that both **shoulders, elbows and wrists** are in view.
+Stand far enough from the camera that your **shoulders, hips and wrists** are in view. Knees and feet are drawn when the camera sees them, but only the hips are needed for typing.
 
 **Switch typing on / off: both hands together.** Bring your hands together (palms touching, wrists closer than 0.35 x your shoulder width) for about 0.15 s. The hand skeletons flash amber and the bottom strip shows `on` or `off`. Move the hands apart before the next switch. Nothing is typed while the hands are together.
 
-**Angles.** The angle is the forearm vector (elbow to wrist) against the screen's X axis: right = 0°, up = 90°, down = -90°. The right arm's angle is mirrored, so for both arms +45° means "hand raised diagonally towards the body" and level towards the body is 0°.
+**Hip angle.** The angle is the tilt of the line through your two hips on the image. 0° means level ("straight"). A positive angle means your right hip is higher than your left, a negative angle means your left hip is higher. Right and left are your own, whatever the camera shows.
 
-| Arm | Angle enters | Result |
-|---|---|---|
-| **Left forearm** | 35° to 145° (up) | Dash `-` |
-| **Left forearm** | -135° to -35° (down) | Dot `.` |
-| **Right forearm** | 35° to 145° (up) | End of letter: the code becomes a letter |
-| **Right forearm** | -135° to -35° (down) | Space (ends the letter first if one is open) |
+| Hips | Result |
+|---|---|
+| Angle ≥ A (5° by default), right hip higher | Dash `-` |
+| Angle ≤ -A, left hip higher | Dot `.` |
+| Waiting (-A < angle < A) for more than **t** (0.6 s by default) | End of letter: the code becomes a letter |
+| Waiting for more than **3t** (1.8 s) | Space (the letter is ended first if one is open) |
 
-**Instant zones.** The first frame inside a zone fires the gesture, with no hold time, so fast movements are caught. That arm is then marked as detected and fires nothing more until it leaves the zone (by more than the *exit margin*, 5° by default, so tracking noise at the edge cannot fire twice). It does not have to return to level: going straight from the up zone to the down zone fires both. If an arm is already in a zone when typing is switched on, it fires only after leaving and coming back.
+**Two states.** *Waiting* is -A < angle < A. *Recorded* means a sway was just typed. From waiting, the first frame with the angle past A types the symbol, with no hold time and no smoothing, and the key goes to recorded. It stays there until the hips come back into waiting (1° below A, so noise at the edge cannot type twice). Two dashes in a row therefore means right hip up, back, right hip up. Going straight from one side to the other types both. The waiting timer starts when the hips enter waiting, and the end of letter and the space each fire once per waiting period. A sway at any time types its symbol, so after a letter has ended the next sway starts the next letter. If your hips are already past A when typing is switched on, nothing is typed until they have come back to waiting and swayed again.
 
-**Feedback.** A forearm turns amber while it is in a zone that has already fired, and flashes thicker when its gesture fires. Press **H** to show each forearm's angle next to the elbow with the zone name (`dash`, `dot`, `end`, `space`), plus `ok` once it has fired. The bottom strip shows the code typed so far, the letter it decodes to (or the letters still reachable), the message, and the switch state. The Morse chart in the top-right corner dims letters the current code can no longer reach.
+**Feedback.** The hip line turns amber while a sway is held after it fired, and flashes thicker when a symbol, letter end or space is typed. Press **H** to show the debug readout next to the hips: the angle, the state (`waiting`, or `dash ok` / `dot ok` once a sway has been typed), and a bar for the waiting timer with ticks at t (`end`) and 3t (`space`). Two thin lines through the hips show the angle A on each side, labelled with what they type. The bottom strip shows the code typed so far, the letter it decodes to (or the letters still reachable), the message, and the switch state. The Morse chart in the top-right corner dims letters the current code can no longer reach.
 
 **Example: typing "HI"**
 
 1. Put both hands together. The strip shows `on`.
-2. Flick the left forearm down and back out of the dot zone, four times (`....`).
-3. Right forearm up, then back down to level. **H** is added.
-4. Two more flicks down with the left arm (`..`), then right forearm up. **I** is added.
-5. Right forearm down. A space is added.
+2. Tilt the left hip up and back to level, four times (`....`).
+3. Wait 0.6 s. **H** is added.
+4. Tilt the left hip up and back twice (`..`), then wait 0.6 s. **I** is added.
+5. Wait a further 1.2 s (1.8 s in total). A space is added.
 6. Hands together again to switch typing off.
 
-**Swap roles.** Press **S** (or *Dot / dash arm* in the Arm settings tab) to type dots and dashes with the right arm and end letters / add spaces with the left. The choice is saved.
+**Swap dot and dash.** If the direction feels the wrong way round for you, press **S** (or *Angle > A types* in the Hips settings tab). The choice is saved.
 
 Press **P** to pause typing while you rest, or **Z** to hide the interface and stop input completely. Deleting is done on the keyboard.
 
@@ -93,11 +95,11 @@ Press **P** to pause typing while you rest, or **Z** to hide the interface and s
 
 | Key | Action |
 |---|---|
-| `S` | Swap roles: which arm types dots and dashes, which ends letters and adds spaces |
+| `S` | Swap dot and dash between the two sways |
 | `X` | Open or close the settings window |
 | `Z` | Hide or show the interface. Hidden = normal camera colours and no typing |
 | `P` | Pause or resume typing |
-| `H` | Show or hide the forearm angle next to each elbow (with the zone it is in: dash, dot, end, space, level) |
+| `H` | Show or hide the hip angle, the ±A lines and the waiting timer |
 | `C` | Show or hide the Morse chart |
 | `M` | Mute or unmute sounds |
 | `Backspace` | Delete the last symbol, or the last letter if no symbol is pending |
@@ -106,8 +108,6 @@ Press **P** to pause typing while you rest, or **Z** to hide the interface and s
 
 ### Settings window
 
-![Settings window](docs/settings.png)
-
 Press `X` to open it. It has two tabs. Changes apply instantly and are saved to `settings.json` when the app closes.
 
 **Camera tab**
@@ -115,17 +115,18 @@ Press `X` to open it. It has two tabs. Changes apply instantly and are saved to 
 - Device number, with the device name underneath on Windows (for example "Integrated Webcam" or "Camo"), resolution, target FPS (30 or 60), mirror view, auto exposure, and manual exposure, brightness, contrast and gain.
 - **Driver settings** (Windows) opens the camera maker's own settings dialog.
 
-**Arm tab**
-- **Exit margin**: how far past the edge of a zone an arm must go before it can fire again (default 5°). The zones themselves (`dash_min`, `dash_max`, `dot_min`, `dot_max`) are in `settings.json`.
+**Hips tab**
+- **Angle A**: the hip tilt that types a symbol, and the edge of the waiting zone (default 5°).
+- **Unit time t**: the waiting time that ends a letter. Three times this adds a space (default 0.6 s).
 - **Hands together**: how close the wrists must be, as a fraction of shoulder width (default 0.35).
-- **Dot / dash arm (S)**: which arm types dots and dashes. The other one ends letters and adds spaces.
-- **Swap left / right arm**: for cameras or phone apps that already mirror the image.
+- **Angle > A types (S)**: whether angle ≥ A (right hip up) types a dash or a dot. Angle ≤ -A types the other one.
+- **Swap left / right**: for cameras or phone apps that already mirror the image.
 
-A card under the controls lists every gesture with the current angles.
+A card under the controls lists every gesture with the current numbers.
 
 ### Using an iPhone or Android phone as the camera
 
-A phone camera is usually much sharper than a laptop webcam, and sharper eyes make blinks easier to read. Install a "phone as webcam" app such as Camo, iVCam or EpocCam on both the phone and the PC, connect the phone by USB, and the phone shows up as an extra camera. In the settings window, step **Device** to the new camera (its name is shown on Windows). Put the phone at eye level and light your face from the front.
+A phone camera is usually much sharper than a laptop webcam, and a sharper picture helps the pose model find the hips. Install a "phone as webcam" app such as Camo, iVCam or EpocCam on both the phone and the PC, connect the phone by USB, and the phone shows up as an extra camera. In the settings window, step **Device** to the new camera (its name is shown on Windows). Put the phone so that your body from the shoulders down to the knees is in view.
 
 ### Troubleshooting
 
@@ -137,15 +138,14 @@ A phone camera is usually much sharper than a laptop webcam, and sharper eyes ma
 |---|---|
 | "Camera unavailable" | Close other apps using the camera (Teams, Zoom, OBS), or pick another device in the settings window. |
 | FPS below 15 | Choose 640×480 in settings, turn off auto exposure in a dark room (long exposure halves the frame rate), and plug the laptop in. |
-| Blinks are missed | Lower **Close threshold** a little. Good, even lighting on the face helps most. |
-| Quick blinks come out as dashes | Raise **Time unit t**. |
-| Letters or words end before you are done | Raise **Time unit t**. |
-| Typing feels slow | Lower **Time unit t**. |
-| Normal blinks add symbols | Press **P** while resting, or **Z** to switch input off. |
-| Input feels slow | Choose 60 FPS in settings. At 30 FPS each frame is 33 ms apart, at 60 FPS only 17 ms. |
-| Left and right are swapped | Turn on **Swap left / right eye**. |
-| Glasses | Usually fine. Strong reflections on the lenses can hide the eyelids, so tilt the screen or the light slightly. |
-| Model download fails | Download the file from the URL in `blink_morse/config.py` and save it as `models/face_landmarker.task`. |
+| No bones, or the hip line jumps around | Step back until the hips and thighs are fully in view, wear clothes that contrast with the wall, and light the room evenly. |
+| The angle stays near 0° when you sway | Press **H** and watch the number. Tilt more, or lower **Angle A** in the Hips tab. |
+| Symbols appear when you did not sway | Raise **Angle A**, or press **P** while resting. |
+| Right and left are swapped | Turn on **Swap left / right**, or press **S** to swap dot and dash. |
+| Letters end before you are done | Raise **Unit time t**. |
+| Typing feels slow | Lower **Unit time t**. |
+| Nothing types | Put both hands together until the strip shows `on`. |
+| Model download fails | Download the file from the URL in `blink_morse/config.py` and save it as `models/pose_landmarker_lite.task` (and `models/hand_landmarker.task`). |
 
 ---
 
@@ -153,11 +153,12 @@ A phone camera is usually much sharper than a laptop webcam, and sharper eyes ma
 
 | Part | Library | Why |
 |---|---|---|
-| Face tracking | [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker) | 478 face points plus 52 expression scores, including one blink score per eye, in real time on a normal CPU |
+| Body tracking | [MediaPipe Pose Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker) | 33 body points (shoulders, wrists, hips, knees, feet) in real time on a normal CPU |
+| Hand tracking | [MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker) | 21 points per hand, drawn on the image |
 | Camera | [OpenCV](https://opencv.org/) | Reads the webcam and controls exposure, brightness and so on |
 | Window and input | [pygame-ce](https://pyga.me/) | Window, keyboard, text rendering and sound playback |
-| Rendering | [ModernGL](https://github.com/moderngl/moderngl) (OpenGL 3.3) | Draws the frosted glass panels and the neon glow on the graphics card |
-| Maths | [NumPy](https://numpy.org/) | Signal maths and sound synthesis |
+| Rendering | [ModernGL](https://github.com/moderngl/moderngl) (OpenGL 3.3) | Puts the interface layer on top of the camera image on the graphics card |
+| Maths | [NumPy](https://numpy.org/) | Landmark maths and sound synthesis |
 | Camera names | [pygrabber](https://github.com/andreaschiavinato/python_grabber) (Windows, optional) | Lists DirectShow device names for the settings window |
 | Fonts | Inter and JetBrains Mono | Bundled in `assets/fonts` under the SIL Open Font License |
 
@@ -171,11 +172,11 @@ Think of the app as a small assembly line with five stations.
 
 1. **The camera takes pictures.** About 30 to 60 times a second, the webcam sends a new picture of you.
 
-2. **The body and hand readers find your arms.** Two pre-trained models from Google find your elbows and wrists, and the 21 points of each hand. Each hand is matched to the nearest wrist, so the app always knows which hand is the right one.
+2. **The body and hand readers find your joints.** Two pre-trained models from Google find your shoulders, wrists, hips, knees and feet, and the 21 points of each hand. Each hand is matched to the nearest wrist, so the app always knows which hand is the right one.
 
 3. **The switch decides if you are typing.** Putting both hands together (wrists close compared with shoulder width) flips typing on or off.
 
-4. **The angle reader turns poses into keys.** For each forearm it measures the angle against the X axis (mirrored for the right arm). The moment the angle enters a zone, that is a gesture; the arm has to leave the zone before it can fire again. Left arm: up = dash, down = dot. Right arm: up = end the letter, down = space. When a letter ends, the dots and dashes are looked up in the international Morse table; a code that does not exist is shown as "no match" instead of a guess.
+4. **The hip reader turns your sway into keys.** It measures the tilt of the line through your hips. The moment the tilt passes the angle A, that is a dash (right hip up) or a dot (left hip up). While the tilt stays inside the waiting zone, a timer runs: at t the letter ends, at 3t a space is added. When a letter ends, the dots and dashes are looked up in the international Morse table; a code that does not exist is shown as "no match" instead of a guess.
 
 5. **The screen shows the result.** The camera keeps its normal colours. Thin bones and hand skeletons show what the app sees, the Morse chart sits in the corner, and the code and message are in a small strip at the bottom. A short sound confirms every symbol, so you can type without looking.
 
@@ -188,62 +189,55 @@ The app never records or uploads anything. Every picture is processed in memory 
 ```mermaid
 flowchart LR
     A[Camera thread<br/>OpenCV, MJPG] -->|latest frame| B[Mirror + BGR to RGB]
-    B --> C[MediaPipe Face Landmarker<br/>VIDEO mode, blendshapes]
-    C -->|eyeBlinkLeft / Right| M[Side mapping<br/>image face to user]
-    M --> D[BlinkDetector<br/>baseline, hysteresis, episodes]
-    D -->|DOT / DASH| F[MorseComposer<br/>pause-driven state machine]
-    D -->|pause time| F
-    C -->|eye corners| G
-    F --> G[HUD<br/>pygame surfaces]
-    G --> H[ModernGL compositor<br/>glass + bloom shader]
-    B --> H
+    B --> C[MediaPipe Pose Landmarker<br/>VIDEO mode, 33 landmarks]
+    B --> H2[MediaPipe Hand Landmarker]
+    C -->|wrists, shoulders| S[TogetherSwitch<br/>typing on / off]
+    C -->|left and right hip| T[hip_tilt<br/>angle in degrees]
+    T --> K[HipKey<br/>waiting / recorded + timer]
+    S -->|active| K
+    K -->|right / left / end / space| F[MorseComposer]
+    C -->|all joints| G[HUD<br/>pygame surfaces]
+    H2 --> G
+    F --> G
+    G --> M[ModernGL compositor]
+    B --> M
     I[Settings process] <-->|Pipe| J[Main loop]
 ```
 
 ### Threads and processes
 
 - **Camera thread** (`camera.py`) blocks on `VideoCapture.read()` and publishes only the newest frame through a `threading.Condition`. The main loop wakes up as soon as a frame arrives and never processes the same frame twice. `CAP_PROP_BUFFERSIZE = 1` and MJPG are requested so frames are fresh and 720p can still reach 30 to 60 FPS. On Windows the backends are tried in the order DirectShow, Media Foundation, default, which also covers virtual cameras created by phone-webcam apps.
-- **Main thread** runs detection, the blink detector, HUD drawing and the OpenGL composition, in that order. The symbol and its sound are produced before any texture upload or drawing, so rendering never adds to the reaction time.
+- **Main thread** runs detection, the gesture logic, HUD drawing and the OpenGL composition, in that order. The symbol and its sound are produced before any texture upload or drawing, so rendering never adds to the reaction time.
 - **Settings process** (`settings_window.py`). The main window owns an OpenGL context, and a second SDL window in the same process can steal or invalidate it. Running the settings UI in a `spawn` child process avoids that and keeps slider dragging from stalling the render loop. Messages are small tuples over a `multiprocessing.Pipe`.
 
-### Signal: blendshapes and side mapping (`face_tracker.py`)
+### Body landmarks and side mapping (`body_tracker.py`)
 
-The Face Landmarker runs in `VIDEO` mode with `output_face_blendshapes=True`. Of the 52 ARKit-style blendshapes, `eyeBlinkLeft` and `eyeBlinkRight` are used. They respond to true lid closure much better than an eye-aspect-ratio computed from the mesh, whose eyelid points tend not to close fully.
+MediaPipe names its landmarks after the body **as depicted in the image**. Mirroring the frame therefore swaps them: in the default selfie view, MediaPipe's "left" hip is the user's right hip. `build_body()` applies that swap once, so every other module only sees the user's own left and right (`left_hip`, `right_knee`, ...). A unit test pins this down. Joints with a visibility below 0.5 are dropped, so a leg that is out of frame is simply not drawn.
 
-MediaPipe names both landmarks and blendshapes after the face **as depicted in the image** (see [google-ai-edge/mediapipe#6368](https://github.com/google-ai-edge/mediapipe/issues/6368)). Mirroring the frame therefore swaps them: in the default selfie view, `eyeBlinkLeft` is the user's right eye. `build_result()` applies that swap once, so every other module only sees the user's own left and right. A unit test pins this down.
+### Hip angle and hip key (`hip_gestures.py`)
 
-### Blink detector (`blinks.py`)
+`hip_tilt()` takes the two hip points in **pixels** (so the image aspect ratio does not bend the angle) and returns `atan2(dy, |dx|)` in degrees, with y flipped so that "the user's right hip is higher" is positive. Because only the horizontal distance is used and not its sign, the value is the same for a mirrored and a non-mirrored image. If the hips are less than 2 % of the image width apart (body turned sideways) there is no angle.
 
-**Per-user baseline.** `EyeSignal` tracks the lower envelope of each raw score while the eye is open (it falls quickly, with a 0.25 s time constant, and rises slowly, with 2 s), capped at 0.4. The normalised closure is `(raw - baseline) / (1 - baseline)`. This matters for people with narrower eyes and for laptop cameras, where looking down at the screen lowers the lids and raises the resting score.
+`HipKey` works on the raw angle (smoothing is available but off, because it costs reaction time) and has two states:
 
-**Hysteresis.** An eye becomes closed above `close_threshold` (0.45) and opens again below `close_threshold - 0.15`.
+- **Waiting**, `|angle| < A`. A timer starts on entry. At `t` it emits `end`, at `3t` `space`, each once per waiting period. In this state `angle >= A` emits `right` and `angle <= -A` emits `left` on the first frame, and the key becomes recorded.
+- **Recorded**. Nothing is emitted until `|angle| < A - margin` (margin 1°), which returns to waiting. A swing to the other side past A while recorded emits that side at once.
 
-**Pose per frame.** `open`, `left`, `right` or `both`. Only `both` counts as a blink; winks are ignored.
+The app turns `right` into a dash and `left` into a dot (swappable with S).
 
-**Blink timing.** A blink starts on the first frame both eyes are closed. It ends when the eyes have looked open for two frames in a row (so one noisy frame cannot split a blink in two), and its end time is the first of those open frames. With time unit `t`:
-
-| Situation | Result | When |
-|---|---|---|
-| Blink still closed after 1.5 t | `DASH` | at 1.5 t, eyes still closed |
-| Blink ended before 1.5 t | `DOT` | when the eyes open |
-
-The dash is emitted as soon as it can be told apart from a dot, which removes the wait for the eyes to open. The 1.5 t split point sits halfway between the "shorter than t" and "longer than 2 t" rule of thumb, so there is no dead zone where a blink types nothing.
-
-The detector also reports `closed_time` (for the live dot-to-dash preview) and `pause_time`: seconds since the eyes opened after the last blink, which the composer uses for the letter and word gaps. Calling `reset(now)` restarts that clock; the app does this when the interface is shown again with Z, so time spent hidden never counts as a pause.
+While typing is off, `update(..., active=False)` still tracks the angle for the HUD but clears the latch and the timer, so a pose that is held when typing starts types nothing.
 
 ### Morse state machine (`morse.py`)
 
-`MorseComposer` knows nothing about cameras, so it can be tested with plain function calls. It is driven by symbols and by the idle time reported every frame:
+`MorseComposer` knows nothing about cameras, so it can be tested with plain function calls. The hip input uses three of its calls:
 
-| State | Input | Result |
-|---|---|---|
-| any | dot / dash | append to `code`, cancel a pending space |
-| `code` not empty | idle ≥ `letter_gap` (3 t) | decode, `LETTER` (arms the space) or `INVALID` |
-| space armed | idle ≥ `word_gap` (7 t) | `SPACE` (never leading, never doubled) |
-| `code` already 6 symbols long | dot / dash | `INVALID` right away, since no code is longer |
-| any | Backspace | remove last symbol, otherwise last character |
+| Call | Result |
+|---|---|
+| `add_symbol(".")` / `add_symbol("-")` | append to `code`; a 7th symbol is `INVALID` right away, since no code is longer |
+| `end_letter()` | decode `code`, `LETTER` or `INVALID`; nothing if `code` is empty |
+| `add_space()` | end the open letter, then add one space (never leading, never doubled) |
 
-Both gaps are measured from the same moment, so a new symbol typed between 3 t and 7 t simply continues the same word. The table follows ITU-R M.1677-1 for A to Z, 0 to 9 and common punctuation.
+The table follows ITU-R M.1677-1 for A to Z, 0 to 9 and common punctuation. Backspace removes the last symbol, or the last character when no symbol is pending.
 
 ### Rendering (`compositor.py` and `hud.py`)
 
@@ -253,13 +247,11 @@ The HUD is drawn with pygame on a transparent surface. Bones and hand skeletons 
 
 ### Audio (`audio.py`)
 
-Tones are built with NumPy: a sine wave plus a soft second harmonic and a short attack and release to avoid clicks. The dash lasts three times as long as the dot, as in real Morse timing. The mixer is opened with a 256-sample buffer (about 6 ms) so the sound follows the blink closely.
+Tones are built with NumPy: a sine wave plus a soft second harmonic and a short attack and release to avoid clicks. The dash lasts three times as long as the dot, as in real Morse timing. The mixer is opened with a 256-sample buffer (about 6 ms) so the sound follows the movement closely.
 
 ### Performance budget
 
-On the CPU side (camera upload, HUD drawing, layer upload) a frame takes about 10 ms. The Face Landmarker with blendshapes adds roughly 8 to 20 ms depending on the CPU, which keeps the app between 30 and 60 FPS on a typical laptop. VSync is off so the camera sets the pace and no extra frame of latency is added.
-
-End-to-end, a dash is typed one camera frame plus one detection after the blink reaches 1.5 t, and a dot two frames after the eyes open (the second frame confirms they really are open).
+On the CPU side (camera upload, HUD drawing, layer upload) a frame takes about 10 ms. The Pose and Hand Landmarkers add roughly 15 to 30 ms depending on the CPU. VSync is off so the camera sets the pace and no extra frame of latency is added.
 
 ---
 
@@ -273,25 +265,24 @@ AI_computer_vision_morse_coding/
 │   ├── app.py               main loop, wires everything together
 │   ├── config.py            constants, colours, saved settings
 │   ├── camera.py            threaded webcam reader
-│   ├── arm_tracker.py       MediaPipe Pose wrapper, forearm angle, arm mapping
-│   ├── arm_gestures.py      forearm angle zones, hands-together switch
-│   ├── curls.py             old curl detector (no longer used by the app)
-│   ├── hand_tracker.py      MediaPipe Hands wrapper, hand-to-arm matching
-│   ├── face_tracker.py      old face input (no longer used by the app)
-│   ├── blinks.py            old blink detector (no longer used by the app)
+│   ├── body_tracker.py      MediaPipe Pose wrapper, joint names, hip angle
+│   ├── hip_gestures.py      hip tilt, waiting / recorded states, timer
+│   ├── arm_gestures.py      hands-together switch (also the old forearm zone keys)
+│   ├── hand_tracker.py      MediaPipe Hands wrapper, hand-to-wrist matching
 │   ├── morse.py             Morse table and composer state machine
 │   ├── hud.py               everything drawn on top of the camera
 │   ├── draw.py              anti-aliased shapes
 │   ├── compositor.py        ModernGL shader: camera + UI layer
 │   ├── audio.py             synthesised feedback sounds
-│   └── settings_window.py   settings window (separate process)
+│   ├── settings_window.py   settings window (separate process)
+│   └── arm_tracker.py, curls.py, face_tracker.py, blinks.py
+│                            older inputs, no longer used by the app
 ├── assets/fonts/            Inter and JetBrains Mono (OFL)
-├── models/                  pose model, downloaded on first run
-├── docs/                    screenshots for this README
-└── tests/                   unit tests for Morse logic and blinks
+├── models/                  pose and hand models, downloaded on first run
+└── tests/                   unit tests for the gesture logic and Morse
 ```
 
 ## Credits
 
-- Pose and face tracking models: Google MediaPipe, Apache License 2.0.
+- Pose and hand tracking models: Google MediaPipe, Apache License 2.0.
 - Fonts: Inter by Rasmus Andersson and JetBrains Mono by JetBrains, both under the SIL Open Font License 1.1 (licence files in `assets/fonts`).

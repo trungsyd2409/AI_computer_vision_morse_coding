@@ -1,5 +1,5 @@
 """
-Settings window with two tabs: Camera and Arm.
+Settings window with two tabs: Camera and Hips.
 
 It runs in a separate process with its own pygame window. The main window
 uses an OpenGL context, and a second window in the same process would
@@ -26,7 +26,7 @@ from .config import (ACCENT, DANGER, FPS_CHOICES, MIN_ACCEPTABLE_FPS,
 
 ROW_H = 32
 PAD = 24
-TABS = [("Camera", "camera"), ("Arm", "arm")]
+TABS = [("Camera", "camera"), ("Hips", "body")]
 
 
 def list_camera_names() -> list:
@@ -139,7 +139,7 @@ class SettingsWindow:
         self.conn = conn
         self.fonts = Fonts()
         self.values = {"camera": dict(initial["camera"]),
-                       "arm": dict(initial["arm"])}
+                       "body": dict(initial["body"])}
         self.stats = {}
         self.camera_names = list_camera_names()
         self.tab = "camera"
@@ -156,7 +156,7 @@ class SettingsWindow:
 
     def _build_widgets(self) -> None:
         cam = self.values["camera"]
-        arm = self.values["arm"]
+        body = self.values["body"]
         w = SETTINGS_SIZE[0] - 2 * PAD
         self.tab_bar = TabBar(TABS, self.tab)
         self.tab_bar.rect = self.pg.Rect(PAD, 150, w, 34)
@@ -186,16 +186,18 @@ class SettingsWindow:
                 Slider("Contrast", "camera", "contrast", cam["contrast"], 0, 255, 1, "{:.0f}"),
                 Slider("Gain", "camera", "gain", cam["gain"], 0, 255, 1, "{:.0f}"),
             ]),
-            "arm": page([
-                Slider("Exit margin", "arm", "exit_margin",
-                       arm.get("exit_margin", 5.0), 0, 15, 1, "{:.0f}\u00b0"),
-                Slider("Hands together", "arm", "together_ratio",
-                       arm.get("together_ratio", 0.35), 0.15, 0.80, 0.01, "{:.2f}\u00d7"),
-                Segmented("Dot / dash arm (S)", "arm", "symbol_side",
-                          [("Left arm", "left"), ("Right arm", "right")],
-                          arm.get("symbol_side", "left")),
-                Toggle("Swap left / right arm", "arm", "swap_arms", arm["swap_arms"]),
-            ]),
+            "body": page([
+                Slider("Angle A", "body", "trigger_angle",
+                       body.get("trigger_angle", 5.0), 2, 25, 0.5, "{:.1f}\u00b0"),
+                Slider("Unit time t", "body", "unit_time",
+                       body.get("unit_time", 0.6), 0.2, 2.0, 0.05, "{:.2f} s"),
+                Slider("Hands together", "body", "together_ratio",
+                       body.get("together_ratio", 0.35), 0.15, 0.80, 0.01, "{:.2f}\u00d7"),
+                Segmented("Angle > A types (S)", "body", "up_symbol",
+                          [("Dash", "dash"), ("Dot", "dot")],
+                          body.get("up_symbol", "dash")),
+                Toggle("Swap left / right", "body", "swap_arms", body["swap_arms"]),
+            ], row_h=30),
         }
 
         footer_y = SETTINGS_SIZE[1] - PAD - 36
@@ -277,11 +279,11 @@ class SettingsWindow:
         self.conn.send(change)
 
     def _reset(self) -> None:
-        from .config import ArmSettings, CameraSettings
+        from .config import BodySettings, CameraSettings
         from dataclasses import asdict
-        cam, arm = asdict(CameraSettings()), asdict(ArmSettings())
+        cam, body = asdict(CameraSettings()), asdict(BodySettings())
         cam["index"] = self.values["camera"]["index"]
-        self.values = {"camera": cam, "arm": arm}
+        self.values = {"camera": cam, "body": body}
         self._build_widgets()
 
     def _read_pipe(self) -> bool:
@@ -343,20 +345,20 @@ class SettingsWindow:
             enabled = self._enabled(widget)
             widget.draw(s, self, hover=(widget is self.hover), enabled=enabled)
 
-        if self.tab == "arm":
+        if self.tab == "body":
             self._draw_timing_card()
 
     def _draw_timing_card(self) -> None:
-        """The gestures, spelled out with the current angles."""
+        """The gestures, spelled out with the current numbers."""
         pg = self.pg
         from . import draw
         s = self.screen
-        arm = self.values["arm"]
-        dash = (arm.get("dash_min", 35.0), arm.get("dash_max", 145.0))
-        dot = (arm.get("dot_min", -135.0), arm.get("dot_max", -35.0))
-        sym = arm.get("symbol_side", "left")
-        ctl = "right" if sym == "left" else "left"
-        last = self.pages["arm"][-1].rect
+        body = self.values["body"]
+        sway = body.get("trigger_angle", 5.0)
+        unit = body.get("unit_time", 0.6)
+        right = body.get("up_symbol", "dash")
+        left = "dot" if right == "dash" else "dash"
+        last = self.pages["body"][-1].rect
         card = pg.Rect(PAD, last.bottom + 8, SETTINGS_SIZE[0] - 2 * PAD, 104)
         layer = pg.Surface(card.size, pg.SRCALPHA)
         draw.rounded_rect(layer, (255, 255, 255, 12), layer.get_rect(), 6)
@@ -365,10 +367,10 @@ class SettingsWindow:
 
         rows = [
             ("Both hands together", "typing on / off"),
-            (f"{sym.capitalize()} {dash[0]:.0f}\u00b0 to {dash[1]:.0f}\u00b0", "dash"),
-            (f"{sym.capitalize()} {dot[0]:.0f}\u00b0 to {dot[1]:.0f}\u00b0", "dot"),
-            (f"{ctl.capitalize()} {dash[0]:.0f}\u00b0 to {dash[1]:.0f}\u00b0", "end letter"),
-            (f"{ctl.capitalize()} {dot[0]:.0f}\u00b0 to {dot[1]:.0f}\u00b0", "space"),
+            (f"Angle > {sway:.1f}\u00b0 (waiting)", right),
+            (f"Angle < -{sway:.1f}\u00b0 (waiting)", left),
+            (f"Waiting longer than t ({unit:.2f} s)", "end letter"),
+            (f"Waiting longer than 3t ({3 * unit:.2f} s)", "space"),
         ]
         for i, (pose, action) in enumerate(rows):
             cy = card.y + 30 + i * 16

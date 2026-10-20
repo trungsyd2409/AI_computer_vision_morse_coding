@@ -6,22 +6,25 @@ read on any background, one amber accent for "live", plain text on a
 plain dark backdrop. No glow, no glass, no animated pop-ups.
 
 On screen:
-* Arm bones (shoulder - elbow - wrist) for both arms.
+* Body bones: shoulders, torso, hips, legs and feet, plus the arms.
 * A 21-point skeleton for both hands. Both turn amber while they are held
   together (the gesture that switches typing on and off).
-* A forearm turns amber while it is in a zone that has already fired, and
-  flashes thicker for a moment when its gesture fires.
+* The hip line turns amber while a sway is held after it fired, and flashes
+  thicker for a moment when a symbol, letter end or space is typed.
+* H: the hip angle, the +-A lines and the waiting timer.
 * "on" / "off" at the right end of the bottom strip.
 * Morse chart in the top-right corner.
 * Code being typed and the message, in a strip at the bottom.
 """
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
 import pygame
 
 from . import draw
+from .body_tracker import BONES
 from .config import ACCENT, BONE, DANGER, FONTS_DIR, PANEL, TEXT, TEXT_MUTED
 from .hand_tracker import FINGERTIPS, HAND_CONNECTIONS
 from .morse import MORSE_TABLE, candidates, decode
@@ -50,20 +53,26 @@ class HudState:
     armed: bool = False                  # typing switched on and not paused
     together: bool = False               # hands held together right now
     paused: bool = False
-    symbol_side: str = "left"
-    control_side: str = "right"
-    # Window pixels of shoulder, elbow, wrist per side, or None
-    arms: dict = field(default_factory=lambda: {"left": None, "right": None})
+    right_symbol: str = "dot"            # what a sway to the user's right types
+    left_symbol: str = "dash"
+    trigger_angle: float = 5.0           # A
+    unit_time: float = 0.6               # t, seconds
+    # Window pixels of every visible joint, named "<side>_<joint>"
+    points: dict = field(default_factory=dict)
     # Window pixels of the 21 hand landmarks per side, or None
     hands: dict = field(default_factory=lambda: {"left": None, "right": None})
-    angle: dict = field(default_factory=lambda: {"left": None, "right": None})
-    zone: dict = field(default_factory=lambda: {"left": None, "right": None})
-    ready: dict = field(default_factory=lambda: {"left": False, "right": False})
-    latched: dict = field(default_factory=lambda: {"left": None, "right": None})
+    hip_angle: Optional[float] = None
+    hip_zone: Optional[str] = None       # "waiting", or "right" / "left" once typed
+    hip_latched: Optional[str] = None    # sway already typed, waiting for the return
+    wait_for: float = 0.0                # seconds spent in waiting
     code: str = ""
     text: str = ""
     show_chart: bool = True
     show_angles: bool = True
+
+
+def _mid(a, b) -> tuple:
+    return ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
 
 
 class Fonts:
@@ -110,7 +119,7 @@ class Hud:
         self.rect_bottom = pygame.Rect(0, 0, min(w - 2 * MARGIN, 460), 60)
         self.rect_bottom.midbottom = (w // 2, h - MARGIN)
 
-        self._flash = {"left": -10.0, "right": -10.0}
+        self._flash = -10.0
         self._invalid = (-10.0, "")
         self._switch = -10.0
         self._now = 0.0
@@ -119,9 +128,8 @@ class Hud:
     # Event hooks (called by the app)
     # ------------------------------------------------------------------------
 
-    def on_gesture(self, side: str, now: float) -> None:
-        if side in self._flash:
-            self._flash[side] = now
+    def on_gesture(self, now: float) -> None:
+        self._flash = now
 
     def on_switch(self, on: bool, now: float) -> None:
         self._switch = now
@@ -139,13 +147,12 @@ class Hud:
         if not visible:
             return
         segments, joints = [], []
+        self._body_shapes(state, now, segments, joints)
         for side in ("left", "right"):
-            self._arm_shapes(state, side, now, segments, joints)
             self._hand_shapes(state, side, segments, joints)
         self._draw_shapes(segments, joints)
         if state.show_angles:
-            for side in ("left", "right"):
-                self._draw_angle(state, side)
+            self._draw_hip(state)
         if state.show_chart:
             self._draw_chart(state)
         self._draw_bottom(state, now)
@@ -192,23 +199,29 @@ class Hud:
     # Skeleton
     # ------------------------------------------------------------------------
 
-    def _live_zone(self, state: HudState, side: str) -> bool:
-        """Inside a zone that has already fired, waiting for the arm to leave."""
-        return state.latched.get(side) is not None
-
-    def _arm_shapes(self, state: HudState, side: str, now: float,
-                    segments: list, joints: list) -> None:
-        pts = state.arms.get(side)
+    def _body_shapes(self, state: HudState, now: float,
+                     segments: list, joints: list) -> None:
+        pts = state.points
         if not pts:
             return
-        shoulder, elbow, wrist = pts[:3]
         base = draw.with_alpha(BONE, 0.85 if state.armed else 0.55)
-        flash = now - self._flash.get(side, -10.0) < FLASH_TIME
-        fore = ACCENT if (flash or self._live_zone(state, side)) else base
+        flash = now - self._flash < FLASH_TIME
+        hip = ACCENT if (flash or state.hip_latched is not None) else base
 
-        segments.append((base, shoulder, elbow, 2))
-        segments.append((fore, elbow, wrist, 4 if flash else 2))
-        joints.extend([(base, shoulder, 3), (base, elbow, 3), (fore, wrist, 3)])
+        for a, b in BONES:
+            if a in pts and b in pts:
+                is_hip = (a, b) == ("left_hip", "right_hip")
+                segments.append((hip if is_hip else base, pts[a], pts[b],
+                                 4 if (is_hip and flash) else 2))
+        # Spine: middle of the shoulders to the middle of the hips.
+        needed = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
+        if all(n in pts for n in needed):
+            top = _mid(pts["left_shoulder"], pts["right_shoulder"])
+            bottom = _mid(pts["left_hip"], pts["right_hip"])
+            segments.append((draw.with_alpha(BONE, 0.4), top, bottom, 1.5))
+        for name, p in pts.items():
+            small = name.endswith(("heel", "toe"))
+            joints.append((hip if name.endswith("hip") else base, p, 2 if small else 3))
 
     def _hand_shapes(self, state: HudState, side: str,
                      segments: list, joints: list) -> None:
@@ -224,40 +237,63 @@ class Hud:
         for i in FINGERTIPS + (0,):
             joints.append((color, pts[i], 2))
 
-    ZONE_NAMES = {
-        "symbol": {"up": "dash", "down": "dot", "level": "level"},
-        "control": {"up": "end", "down": "space", "level": "level"},
-    }
-
-    def _draw_angle(self, state: HudState, side: str) -> None:
-        """Forearm angle and the zone it is in, next to the elbow (H key)."""
-        pts = state.arms.get(side)
-        angle = state.angle.get(side)
-        if not pts or angle is None:
+    def _draw_hip(self, state: HudState) -> None:
+        """Hip angle, the +-A lines and the waiting timer (H key)."""
+        pts = state.points
+        angle = state.hip_angle
+        if angle is not None and abs(angle) < 0.05:
+            angle = 0.0                               # no "-0.0"
+        if angle is None or "left_hip" not in pts or "right_hip" not in pts:
             return
-        role = "symbol" if side == state.symbol_side else "control"
-        zone = state.zone.get(side)
-        name = self.ZONE_NAMES[role].get(zone, "-")
-        # Amber + "ok" once the gesture in this zone has fired.
-        done = state.latched.get(side) is not None
-        name += " ok" if done else ""
-        color = ACCENT if done else TEXT
-        label = self.text("mono", 14, f"{angle:+4.0f}\u00b0 {name}", color)
+        lh, rh = pts["left_hip"], pts["right_hip"]
+        cx, cy = (lh[0] + rh[0]) / 2, (lh[1] + rh[1]) / 2
+        # +1 when the user's right hip is on the right of the screen (mirrored view)
+        flip = 1.0 if rh[0] >= lh[0] else -1.0
+        half = max(40.0, abs(rh[0] - lh[0]) / 2 + 26)
 
-        # Beside the elbow, on the side away from the body.
-        (sx, _), (ex, ey) = pts[0], pts[1]
-        out = -1 if side == "left" else 1
-        if abs(ex - sx) > 8:
-            out = 1 if ex > sx else -1
-        box = label.get_rect()
-        box.inflate_ip(12, 6)
-        if out > 0:
-            box.midleft = (round(ex + 12), round(ey))
-        else:
-            box.midright = (round(ex - 12), round(ey))
+        # Ghost lines at +-A: when the hip line reaches one, the sway fires.
+        for sign, symbol in ((1, state.right_symbol), (-1, state.left_symbol)):
+            theta = math.radians(state.trigger_angle * sign)
+            dx, dy = flip * half * math.cos(theta), -flip * half * math.sin(theta)
+            a, b = (cx - dx, cy - dy), (cx + dx, cy + dy)
+            draw.bone(self.ui, draw.with_alpha(TEXT, 0.35), a, b, 1)
+            high = b if sign > 0 else a              # the end that is raised
+            tag = self.text("regular", 11, symbol, TEXT_MUTED)
+            box = tag.get_rect(center=(round(high[0]), round(high[1] - 11)))
+            draw.rounded_rect(self.ui, BACKDROP, box.inflate(8, 2), 3)
+            self.blit(tag, box.center, "center")
+
+        names = {"right": state.right_symbol, "left": state.left_symbol,
+                 "waiting": "waiting"}
+        name = names.get(state.hip_zone, "-")
+        done = state.hip_latched is not None
+        if done:
+            name += " ok"
+        label = self.text("mono", 14, f"{angle:+5.1f}\u00b0 {name}", ACCENT if done else TEXT)
+
+        # Waiting timer: a bar to 3t with ticks at t (end) and 3t (space).
+        unit = max(state.unit_time, 0.05)
+        held = state.wait_for
+        bar_w = 118
+        box = pygame.Rect(0, 0, max(label.get_width(), bar_w) + 16, 50)
+        box.midleft = (round(max(lh[0], rh[0]) + half + 14), round(cy))
+        if box.right > self.size[0] - MARGIN:
+            box.midright = (round(min(lh[0], rh[0]) - half - 14), round(cy))
         box.clamp_ip(pygame.Rect(0, 0, *self.size))
         draw.rounded_rect(self.ui, BACKDROP, box, 3)
-        self.blit(label, box.center, "center")
+        self.blit(label, (box.x + 8, box.y + 6))
+
+        bar = pygame.Rect(box.x + 8, box.y + 30, bar_w, 4)
+        pygame.draw.rect(self.ui, (255, 255, 255, 40), bar)
+        fill = min(1.0, held / (3 * unit))
+        color = ACCENT if held >= unit else TEXT_MUTED
+        pygame.draw.rect(self.ui, color, pygame.Rect(bar.x, bar.y, round(bar.w * fill), bar.h))
+        for k, tick in ((1, "end"), (3, "space")):
+            x = bar.x + round(bar.w * k / 3) - (1 if k == 3 else 0)
+            pygame.draw.rect(self.ui, TEXT, pygame.Rect(x, bar.y - 2, 1, bar.h + 4))
+            reached = held >= k * unit
+            img = self.text("regular", 10, tick, ACCENT if reached else TEXT_MUTED)
+            self.blit(img, (x, bar.bottom + 3), "topright" if k == 3 else "midtop")
 
     # ------------------------------------------------------------------------
     # Morse chart
@@ -346,6 +382,10 @@ class Hud:
         elif not state.armed:
             self.blit(self.text("regular", 12, "put both hands together to start",
                                 TEXT_MUTED), (x0, cy), "midleft")
+        elif not state.text:
+            hint = (f"hips right = {state.right_symbol}   left = {state.left_symbol}"
+                    f"   wait = end / space")
+            self.blit(self.text("regular", 12, hint, TEXT_MUTED), (x0, cy), "midleft")
 
         # Typing switch state, right end of line 1.
         if state.paused:

@@ -1,18 +1,20 @@
 """
-Application loop: camera -> pose + hands -> arm gestures -> Morse -> screen.
+Application loop: camera -> pose + hands -> hip sway -> Morse -> screen.
 
 Per frame:
   1. Take the newest camera frame (the camera runs in its own thread).
-  2. Mirror it and run MediaPipe Pose (both forearms) and MediaPipe Hands
-     (both hands, matched to the body by wrist position; drawn only).
+  2. Mirror it and run MediaPipe Pose (shoulders to toes) and MediaPipe
+     Hands (both hands, matched to the body by wrist position; drawn only).
   3. Bring both hands together to switch typing on or off.
-  4. While typing is on, each forearm's angle against the X axis (the
-     right arm's mirrored, so both read +45 for "raised towards the body")
-     fires a gesture the moment it enters a zone:
-       symbol arm  (left):  35..145 = dash,          -135..-35 = dot
-       control arm (right): 35..145 = end of letter, -135..-35 = space
-     An arm must leave its zone before it can fire again. S swaps roles.
-  5. Draw the HUD (arm bones, hand skeletons, Morse chart, typed code and
+  4. While typing is on, the tilt of the hip line is the input. With the
+     angle A (-A < angle < A is "waiting"):
+       angle >= A                          -> dash
+       angle <= -A                         -> dot
+       waiting for more than t             -> end of letter
+       waiting for more than 3t            -> space
+     A sway fires the moment it passes A; the hips have to come back to
+     waiting before the next one fires. S swaps dot and dash.
+  5. Draw the HUD (body bones, hand skeletons, Morse chart, typed code and
      message) and let the GPU put it over the camera image.
 
 Pressing Z hides the whole interface, shows the plain camera image and
@@ -26,13 +28,14 @@ import moderngl
 import numpy as np
 import pygame
 
-from .arm_gestures import TogetherSwitch, ZoneKey, mirror_angle, together_ratio
-from .arm_tracker import ArmTracker
+from .arm_gestures import TogetherSwitch, together_ratio
 from .audio import SoundBank
+from .body_tracker import BodyTracker
 from .camera import CameraStream
 from .compositor import Compositor, cover_crop
-from .config import APP_TITLE, WINDOW_SIZE, AppSettings, ArmSettings, CameraSettings
+from .config import APP_TITLE, WINDOW_SIZE, AppSettings, BodySettings, CameraSettings
 from .hand_tracker import HandTracker, assign_hands
+from .hip_gestures import HipKey
 from .hud import Hud, HudState
 from .morse import EventKind, MorseComposer
 from .settings_window import SettingsLink
@@ -46,9 +49,10 @@ class BlinkMorseApp:
 
         # The models are loaded before the window opens so a first-run
         # download does not leave a frozen black window on screen.
-        self.tracker = ArmTracker()
+        self.tracker = BodyTracker()
         self.hands = HandTracker()
         self.switch = TogetherSwitch()   # both hands together = typing on / off
+        self.hip = HipKey()              # hip sway = dot / dash / end / space
 
         pygame.init()
         pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
@@ -71,23 +75,21 @@ class BlinkMorseApp:
         self.camera = CameraStream(self.settings.camera)
         self.camera.start()
 
-        # One instant zone key per arm; what a zone means depends on the role.
-        self.arm_keys = {side: ZoneKey() for side in SIDES}
         self._apply_key_settings()
         self.composer = MorseComposer()
         self.settings_link = SettingsLink()
 
-        self.paused = False               # P stops typing, e.g. to rest the arms
+        self.paused = False               # P stops typing, e.g. to rest
         self.ui_visible = True            # Z hides the UI and stops input
         self.show_chart = True
-        self.show_angles = True           # H: forearm angle readouts for debugging
+        self.show_angles = True           # H: hip angle readout for debugging
         self.fps = 0.0
         self._frame_id = 0
         self._start = time.perf_counter()
         self._last_stats = 0.0
         self._props_sent = -1
         self._state = HudState()
-        self._arm_pts = {"left": None, "right": None}
+        self._body_pts = {}
         self._hand_pts = {"left": None, "right": None}
 
     # ------------------------------------------------------------------------
@@ -146,7 +148,7 @@ class BlinkMorseApp:
                 self._last_stats = 0.0
                 self._props_sent = -1
             elif event.key == pygame.K_s:
-                self._apply_arm_setting("symbol_side", self.settings.arm.control_side)
+                self._apply_body_setting("up_symbol", self.settings.body.down_symbol)
             elif event.key == pygame.K_z:
                 self._toggle_ui()
             elif event.key == pygame.K_p:
@@ -166,15 +168,14 @@ class BlinkMorseApp:
         return True
 
     def _reset_input(self, switch_off: bool = False) -> None:
-        for key in self.arm_keys.values():
-            key.reset()
+        self.hip.reset()
         if switch_off:
             self.switch.reset()
 
     def _toggle_ui(self) -> None:
         self.ui_visible = not self.ui_visible
         self._state.body = False
-        self._arm_pts = {"left": None, "right": None}
+        self._body_pts = {}
         self._hand_pts = {"left": None, "right": None}
         self._reset_input(switch_off=True)
 
@@ -190,9 +191,8 @@ class BlinkMorseApp:
             return
 
         timestamp_ms = int((now - self._start) * 1000)
-        arm_cfg = self.settings.arm
-        symbol_side = arm_cfg.symbol_side
-        body = self.tracker.detect(frame_rgb, timestamp_ms, cam.mirror, arm_cfg.swap_arms)
+        body = self.tracker.detect(frame_rgb, timestamp_ms, cam.mirror,
+                                   self.settings.body.swap_arms)
         detected = self.hands.detect_all(frame_rgb, timestamp_ms)
 
         h, w = frame_rgb.shape[:2]
@@ -206,57 +206,44 @@ class BlinkMorseApp:
             self.sounds.play("resume" if self.switch.on else "pause")
             self.hud.on_switch(self.switch.on, now)
         armed = self.switch.on and not self.paused
-        # Nothing is typed while the hands are together: the arms are busy
+        # Nothing is typed while the hands are together: the body is busy
         # with the switch gesture.
         listening = armed and not self.switch.together
 
-        arms = {side: (None if body is None else getattr(body, side)) for side in SIDES}
-        for side in SIDES:
-            arm = arms[side]
-            angle = None
-            if arm is not None:
-                angle = mirror_angle(arm.forearm_x) if side == "right" else arm.forearm_x
-            key = self.arm_keys[side]
-            if listening:
-                gesture = key.update(angle, now)
-                if gesture is not None:
-                    self._fire(side, gesture, symbol_side)
-            else:
-                # Not typing: show the angle but forget any state, so an arm
-                # that is already in a zone when typing starts types nothing.
-                key.reset()
-                key.angle = angle
-                key.zone = None if angle is None else key.zone_of(angle)
+        # When not listening the hip key still tracks the angle for the HUD,
+        # but forgets everything, so a pose held when typing starts types nothing.
+        angle = None if body is None else body.hip_angle
+        for event in self.hip.update(angle, now, active=listening):
+            self._fire(event)
 
-        self._update_points(arms, hands, frame_rgb.shape)
+        self._update_points(body, hands, frame_rgb.shape)
 
         state = self._state
         state.body = body is not None
         state.armed = armed
         state.together = self.switch.together
-        keys = self.arm_keys
-        state.angle = {side: keys[side].angle for side in SIDES}
-        state.zone = {side: keys[side].zone for side in SIDES}
-        state.ready = {side: keys[side].ready for side in SIDES}
-        # Zone already fired, waiting for the arm to leave it.
-        state.latched = {side: (keys[side].latched if listening else None) for side in SIDES}
+        state.hip_angle = self.hip.angle
+        state.hip_zone = self.hip.zone
+        state.hip_latched = self.hip.latched if listening else None
+        state.wait_for = self.hip.wait_for if listening else 0.0
         self.compositor.update_camera(frame_rgb)
 
-    def _fire(self, side: str, gesture: str, symbol_side: str) -> None:
-        if side == symbol_side:
-            symbol = "-" if gesture == ZoneKey.UP else "."
-            self._apply_composer(self.composer.add_symbol(symbol), side)
-        elif gesture == ZoneKey.UP:
-            self._apply_composer(self.composer.end_letter(), side)
-        else:
-            for event in self.composer.add_space():
-                self._apply_composer(event, side)
+    def _fire(self, event: str) -> None:
+        cfg = self.settings.body
+        if event in ("right", "left"):
+            name = cfg.up_symbol if event == "right" else cfg.down_symbol
+            self._apply_composer(self.composer.add_symbol("." if name == "dot" else "-"))
+        elif event == "end":
+            self._apply_composer(self.composer.end_letter())
+        elif event == "space":
+            for composed in self.composer.add_space():
+                self._apply_composer(composed)
 
-    def _update_points(self, arms: dict, hands: dict, shape) -> None:
+    def _update_points(self, body, hands: dict, shape) -> None:
         """
-        Arm and hand landmarks in window pixels, for drawing only. They are
-        lightly smoothed so the bones do not jitter; input always uses the
-        raw angles.
+        Body and hand landmarks in window pixels, for drawing only. They are
+        lightly smoothed so the bones do not jitter; input uses its own
+        filtering (see `HipKey`).
         """
         h, w = shape[:2]
         (sx, sy), (ox, oy) = cover_crop((w, h), WINDOW_SIZE)
@@ -271,29 +258,31 @@ class BlinkMorseApp:
                 return previous * 0.4 + pts * 0.6
             return pts
 
+        old = self._body_pts
+        self._body_pts = {}
+        if body is not None:
+            for name, point in body.points.items():
+                pos = to_window([point])[0]
+                self._body_pts[name] = smooth(old.get(name), pos)
         for side in SIDES:
-            arm = arms[side]
-            # Shoulder, elbow, wrist only: the hand comes from the hand model.
-            self._arm_pts[side] = (None if arm is None else
-                                   smooth(self._arm_pts[side], to_window(arm.points[:3])))
             hand = hands[side]
             self._hand_pts[side] = (None if hand is None else
                                     smooth(self._hand_pts[side], to_window(hand)))
 
-    def _apply_composer(self, event, side: str = "") -> None:
+    def _apply_composer(self, event) -> None:
         if event is None:
             return
         now = time.perf_counter()
         kind = event.kind
         if kind == EventKind.SYMBOL:
             self.sounds.play("dot" if event.value == "." else "dash")
-            self.hud.on_gesture(side, now)
+            self.hud.on_gesture(now)
         elif kind == EventKind.LETTER:
             self.sounds.play("letter")
-            self.hud.on_gesture(side, now)
+            self.hud.on_gesture(now)
         elif kind == EventKind.SPACE:
             self.sounds.play("space")
-            self.hud.on_gesture(side, now)
+            self.hud.on_gesture(now)
         elif kind == EventKind.INVALID:
             self.sounds.play("invalid")
             self.hud.on_invalid(event.value, now)
@@ -313,7 +302,7 @@ class BlinkMorseApp:
                 if section == "camera":
                     self._apply_camera_setting(key, value)
                 else:
-                    self._apply_arm_setting(key, value)
+                    self._apply_body_setting(key, value)
             elif msg[0] == "action":
                 if msg[1] == "driver_dialog":
                     self.camera.open_driver_dialog()
@@ -336,26 +325,24 @@ class BlinkMorseApp:
             setattr(cam, key, value)
             self.camera.set_property(key, value)
 
-    def _apply_arm_setting(self, key: str, value) -> None:
-        e = self.settings.arm
+    def _apply_body_setting(self, key: str, value) -> None:
+        e = self.settings.body
         if not hasattr(e, key):
             return
-        changed_roles = key == "symbol_side" and value != e.symbol_side
+        changed_symbol = key == "up_symbol" and value != e.up_symbol
         setattr(e, key, value)
-        if changed_roles or key == "swap_arms":
+        if changed_symbol or key == "swap_arms":
             self._reset_input()
-            self._arm_pts = {"left": None, "right": None}
+            self._body_pts = {}
             self._hand_pts = {"left": None, "right": None}
-        if changed_roles:
+        if changed_symbol:
             self.sounds.play("resume")
         self._apply_key_settings()
 
     def _apply_key_settings(self) -> None:
-        e = self.settings.arm
-        for k in self.arm_keys.values():
-            k.dash = (min(e.dash_min, e.dash_max), max(e.dash_min, e.dash_max))
-            k.dot = (min(e.dot_min, e.dot_max), max(e.dot_min, e.dot_max))
-            k.margin = e.exit_margin
+        e = self.settings.body
+        self.hip.trigger = e.trigger_angle
+        self.hip.unit = e.unit_time
         self.switch.ratio = e.together_ratio
         self.switch.release = max(0.6, e.together_ratio + 0.2)
 
@@ -364,8 +351,8 @@ class BlinkMorseApp:
         fresh_cam = CameraSettings(index=index)
         for field_name, value in vars(fresh_cam).items():
             setattr(self.settings.camera, field_name, value)
-        for field_name, value in vars(ArmSettings()).items():
-            self._apply_arm_setting(field_name, value)
+        for field_name, value in vars(BodySettings()).items():
+            self._apply_body_setting(field_name, value)
         self.camera.restore_driver_defaults()
         self.camera.reopen()
         self._props_sent = -1
@@ -394,14 +381,14 @@ class BlinkMorseApp:
 
     def _render(self, now: float) -> None:
         state = self._state
-        e = self.settings.arm
+        e = self.settings.body
         state.camera_error = self.camera.error
         state.code = self.composer.code
         state.text = self.composer.text
         state.paused = self.paused
-        state.symbol_side, state.control_side = e.symbol_side, e.control_side
-        state.arms = {side: (None if p is None else [(float(x), float(y)) for x, y in p])
-                      for side, p in self._arm_pts.items()}
+        state.right_symbol, state.left_symbol = e.up_symbol, e.down_symbol
+        state.trigger_angle, state.unit_time = e.trigger_angle, e.unit_time
+        state.points = {name: (float(p[0]), float(p[1])) for name, p in self._body_pts.items()}
         state.hands = {side: (None if p is None else [(float(x), float(y)) for x, y in p])
                        for side, p in self._hand_pts.items()}
         state.show_chart = self.show_chart

@@ -43,7 +43,7 @@ POSE_MODEL_URL = (
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Arm Morse"
+APP_TITLE = "Hip Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -104,42 +104,40 @@ class CameraSettings:
 
 
 @dataclass
-class ArmSettings:
+class BodySettings:
     """
-    Gestures, all read from the forearm (elbow -> wrist) angle against the
-    screen's X axis. The right arm's angle is mirrored, so for both arms
-    +45 means "hand raised diagonally towards the body".
+    Hip sway is the Morse input. The hip angle is the tilt of the line
+    through both hips (0 = level, positive = the user's right hip higher).
+    A is `trigger_angle`.
 
-    Both hands together:   typing on / off
-    Symbol arm (left):     up zone = dash,          down zone = dot
-    Control arm (right):   up zone = end of letter, down zone = space
+    Waiting (-A < angle < A), shorter than t: a sway types at once
+        angle >= A   dash   (see `up_symbol`)
+        angle <= -A  dot
+    Waiting longer than t:   end of letter
+    Waiting longer than 3t:  space
+    Both hands together:     typing on / off
 
-    Each gesture fires on the first frame inside its zone; the arm has to
-    leave the zone before that arm can fire again.
+    After a sway the hips have to come back to waiting before the next one.
     """
 
-    dash_min: float = 35.0            # up zone
-    dash_max: float = 145.0
-    dot_min: float = -135.0           # down zone
-    dot_max: float = -35.0
-    # Degrees past the zone edge before the arm counts as having left it.
-    exit_margin: float = 5.0
+    trigger_angle: float = 5.0        # A, degrees
+    unit_time: float = 0.6            # t, seconds
     # Wrists closer than this x shoulder width = hands together.
     together_ratio: float = 0.35
     swap_arms: bool = False           # fixes cameras that mirror the image
-    # Which arm types dots and dashes. The other one ends letters and adds
-    # spaces. S swaps the two roles.
-    symbol_side: str = "left"
+    # What the right hip going up (angle >= A) types; the left hip going up
+    # (angle <= -A) types the other one. S swaps the two.
+    up_symbol: str = "dash"
 
     @property
-    def control_side(self) -> str:
-        return "right" if self.symbol_side == "left" else "left"
+    def down_symbol(self) -> str:
+        return "dot" if self.up_symbol == "dash" else "dash"
 
 
 @dataclass
 class AppSettings:
     camera: CameraSettings = field(default_factory=CameraSettings)
-    arm: ArmSettings = field(default_factory=ArmSettings)
+    body: BodySettings = field(default_factory=BodySettings)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -155,9 +153,12 @@ class AppSettings:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             return settings
-        for name in ("camera", "arm"):
+        for name in ("camera", "body"):
             section = getattr(settings, name)
-            saved = data.get(name, {})
+            saved = data.get(name)
+            if saved is None and name == "body":
+                saved = data.get("arm", {})      # file written by the arm version
+            saved = saved or {}
             for f in fields(section):
                 if f.name not in saved:
                     continue

@@ -1,4 +1,4 @@
-"""Tests for the forearm-tilt gestures and the gesture-driven Morse flow."""
+"""Tests for the forearm zone key (legacy), the hands-together switch and hand matching."""
 
 import unittest
 
@@ -6,7 +6,6 @@ import numpy as np
 
 from blink_morse.arm_gestures import (TiltKey, TogetherSwitch, ZoneKey, forearm_angle,
                                       mirror_angle, together_ratio, x_axis_angle)
-from blink_morse.config import ArmSettings
 from blink_morse.hand_tracker import FistGate, assign_hands
 from blink_morse.morse import MorseComposer
 
@@ -128,12 +127,6 @@ class GestureFlowTest(unittest.TestCase):
                     c.add_space()
         self.assertEqual(c.text, "AD ")
         self.assertEqual(c.code, "")
-
-    def test_settings_roles(self):
-        s = ArmSettings()
-        self.assertEqual((s.symbol_side, s.control_side), ("left", "right"))
-        s.symbol_side = "right"
-        self.assertEqual(s.control_side, "left")
 
 
 class SwitchTest(unittest.TestCase):

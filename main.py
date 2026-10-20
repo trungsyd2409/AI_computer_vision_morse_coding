@@ -1,14 +1,13 @@
 """
-Arm Morse - type Morse code with forearm angles in front of a webcam.
+Hip Morse - type Morse code by swaying your hips in front of a webcam.
 
-Put both hands together to switch typing on or off. Each forearm's angle
-against the X axis (right arm mirrored) fires the moment it enters a zone:
-left 35..145 = dash, -135..-35 = dot; right 35..145 = end of letter,
--135..-35 = space. An arm must leave its zone before it fires again.
+Put both hands together to switch typing on or off. Then, with angle A:
+hip angle >= A is a dash, <= -A is a dot. Waiting (-A < angle < A) for more
+than t ends the letter, for more than 3t adds a space. H shows the angle.
 
 Run:  python main.py
-Keys: S swap arms, X settings, Z hide UI, P pause, H angles, C chart, M mute,
-      Backspace / Delete edit, Esc quit.
+Keys: S swap dot / dash, X settings, Z hide UI, P pause, H hip angle,
+      C chart, M mute, Backspace / Delete edit, Esc quit.
 """
 
 import multiprocessing
