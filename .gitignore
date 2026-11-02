@@ -5,3 +5,4 @@ venv/
 settings.json
 models/*.task
 models/*.part
+logs/

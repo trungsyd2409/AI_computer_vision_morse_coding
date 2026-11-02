@@ -31,6 +31,7 @@ FONTS_DIR = ASSETS_DIR / "fonts"
 MODELS_DIR = ROOT_DIR / "models"
 
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"   # created on first exit
+LOGS_DIR = SETTINGS_DIR / "logs"                 # feature CSV files (L key)
 FACE_MODEL_PATH = MODELS_DIR / "face_landmarker.task"
 FACE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
@@ -41,7 +42,7 @@ FACE_MODEL_URL = (
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Blink Morse"
+APP_TITLE = "Nose Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -61,8 +62,8 @@ DANGER = (251, 113, 133)
 # One colour per action so the legend, the meters, the typed symbols and
 # the pause countdown all speak the same visual language.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # short blink
-    "dash": (167, 139, 250),      # long blink
+    "dot": (103, 232, 249),       # short flare
+    "dash": (167, 139, 250),      # long flare
     "letter": (251, 191, 36),     # short pause -> end of letter
     "word": (74, 222, 128),       # long pause  -> space
 }
@@ -96,17 +97,22 @@ class CameraSettings:
 
 
 @dataclass
-class EyeSettings:
-    """Threshold and timing for reading blinks."""
+class NoseSettings:
+    """Threshold and timing for reading nostril flares."""
 
-    # Eye closure is a 0..1 score after removing the user's own resting
-    # level. Above `close_threshold` an eye counts as closed.
-    close_threshold: float = 0.45
+    # The flare score is 0 with the nose relaxed and 1 for an average flare
+    # from calibration. Above `threshold` the nose counts as pressed.
+    threshold: float = 0.50
     # The Morse time unit t, in seconds. Everything is derived from it:
-    # blink < 1.5 t = dot, >= 1.5 t = dash, open 3 t = end of letter,
-    # open 7 t = end of word.
-    time_unit: float = 0.10
-    swap_eyes: bool = False           # fixes cameras that mirror the image
+    # flare < 1.5 t = dot, >= 1.5 t = dash, relaxed 3 t = end of letter,
+    # relaxed 7 t = end of word. Slower than the blink version (0.1 s)
+    # because the nose muscles and the smoothing filter are slower.
+    time_unit: float = 0.25
+    # mouthSmile above this ignores the nose: smiling widens it too.
+    smile_gate: float = 0.35
+    # Include the darkness of the nostril openings. Turn it off when the
+    # camera cannot see the nostrils (camera above the face, dim light).
+    use_dark: bool = True
 
     @property
     def dash_after(self) -> float:
@@ -124,7 +130,7 @@ class EyeSettings:
 @dataclass
 class AppSettings:
     camera: CameraSettings = field(default_factory=CameraSettings)
-    eyes: EyeSettings = field(default_factory=EyeSettings)
+    nose: NoseSettings = field(default_factory=NoseSettings)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -140,7 +146,7 @@ class AppSettings:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             return settings
-        for name in ("camera", "eyes"):
+        for name in ("camera", "nose"):
             section = getattr(settings, name)
             saved = data.get(name, {})
             for f in fields(section):

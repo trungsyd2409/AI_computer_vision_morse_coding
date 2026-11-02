@@ -1,11 +1,14 @@
 """
 Wrapper around MediaPipe's Face Landmarker (Tasks API).
 
-For every frame MediaPipe returns 478 face landmarks and 52 "blendshape"
-scores that describe the expression. Two of those scores, `eyeBlinkLeft`
-and `eyeBlinkRight`, go from about 0 (eye open) to about 1 (eye closed)
-and drive the whole app. Four landmarks, the corners of each eye, are also
-returned so the HUD can place the openness readout next to each eye.
+For every frame MediaPipe returns 478 face landmarks, 52 "blendshape"
+scores that describe the expression, and a 4x4 matrix with the head pose.
+The nose input (nose.py) uses all three: the landmarks to measure the nose
+wings and find the nostrils, the `noseSneer` / `mouthSmile` / `jawOpen`
+blendshapes, and the head pitch and yaw to ignore a turned head.
+
+The eye blink scores are still returned, and still mapped to the user's
+own left and right, so the blink detector and its tests keep working.
 
 Which eye is "left"
 -------------------
@@ -16,8 +19,9 @@ image, not after the viewer. When the frame is mirrored before detection
 so the rest of the app only ever deals with the user's own left and right.
 """
 
+import math
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +55,19 @@ class FaceResult:
     # (outer corner, inner corner) of each eye as normalised (x, y) pairs
     left_corners: Optional[tuple] = None
     right_corners: Optional[tuple] = None
+    points: Optional[np.ndarray] = None   # (478, 2) landmarks in image pixels
+    blend: dict = field(default_factory=dict)   # blendshape name -> score
+    pitch: float = 0.0           # head nod in degrees
+    yaw: float = 0.0             # head turn in degrees
+
+    @property
+    def smile(self) -> float:
+        return max(self.blend.get("mouthSmileLeft", 0.0),
+                   self.blend.get("mouthSmileRight", 0.0))
+
+    @property
+    def jaw(self) -> float:
+        return self.blend.get("jawOpen", 0.0)
 
 
 class FaceTracker:
@@ -69,6 +86,7 @@ class FaceTracker:
             min_face_presence_confidence=0.5,
             min_tracking_confidence=0.5,
             output_face_blendshapes=True,
+            output_facial_transformation_matrixes=True,
         )
         self._landmarker = vision.FaceLandmarker.create_from_options(options)
         self._last_ts = -1
@@ -100,12 +118,28 @@ class FaceTracker:
                 return tuple((lm[i].x, lm[i].y) for i in ids)
 
             corners = (pair(MP_LEFT_EYE_CORNERS), pair(MP_RIGHT_EYE_CORNERS))
-        return build_result(scores.get("eyeBlinkLeft", 0.0),
+        face = build_result(scores.get("eyeBlinkLeft", 0.0),
                             scores.get("eyeBlinkRight", 0.0), mirrored, swap_eyes,
                             corners)
+        face.blend = scores
+        if result.face_landmarks:
+            h, w = frame_rgb.shape[:2]
+            face.points = np.array([[p.x * w, p.y * h] for p in result.face_landmarks[0]],
+                                   dtype=np.float64)
+        if result.facial_transformation_matrixes:
+            face.pitch, face.yaw = head_angles(result.facial_transformation_matrixes[0])
+        return face
 
     def close(self) -> None:
         self._landmarker.close()
+
+
+def head_angles(matrix) -> tuple:
+    """(pitch, yaw) in degrees from MediaPipe's 4x4 face transformation matrix."""
+    m = np.asarray(matrix, dtype=np.float64).reshape(4, 4)
+    pitch = math.degrees(math.atan2(m[2, 1], m[2, 2]))
+    yaw = math.degrees(math.atan2(-m[2, 0], math.hypot(m[2, 1], m[2, 2])))
+    return pitch, yaw
 
 
 def build_result(mp_left: float, mp_right: float, mirrored: bool,

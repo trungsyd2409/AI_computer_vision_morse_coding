@@ -1,9 +1,10 @@
 """
-Blink Morse - type Morse code with your eyes in front of a webcam.
+Nose Morse - type Morse code by flaring your nostrils in front of a webcam.
 
 Run:  python main.py
-Keys: X settings, Z hide UI, P pause listening, H toggle chart, M mute,
-      Backspace / Delete edit, Esc quit.
+Keys: C calibrate, X settings, Z hide UI, P pause listening, H toggle chart,
+      F feature weights, G face mesh / timing legend, L record features to
+      CSV (hold N to label a flare), M mute, Backspace / Delete edit, Esc quit.
 """
 
 import multiprocessing

@@ -1,9 +1,8 @@
-# Blink Morse
+# Nose Morse
 
-Type Morse code with your eyes, the way a telegraph operator uses a key: a short blink is a dot, a long blink is a dash, and keeping your eyes open marks the end of a letter or a word. Everything is timed in one adjustable unit, and the decoded text appears on screen as you go, no hands needed.
+Type Morse code by flaring your nostrils in front of a webcam. A short flare is a dot, a long flare is a dash, and keeping the nose relaxed ends a letter or a word. Everything is timed in one adjustable unit t, and the decoded text appears on screen as you type.
 
-![Interface preview](docs/preview.png)
-<sub>Interface preview, rendered with a placeholder camera image.</sub>
+No single camera measurement of a nostril flare is reliable, so the app measures six features of the nose and learns, in a 10-second guided calibration, how much each one is worth for your face, your camera and your light.
 
 ---
 
@@ -40,7 +39,7 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-> The project uses **pygame-ce**, a maintained fork of pygame. If the classic `pygame` package is already installed in the same environment, remove it first with `pip uninstall pygame`, because both packages provide the `pygame` module.
+The project uses pygame-ce, a maintained fork of pygame. If the classic `pygame` package is installed in the same environment, remove it first with `pip uninstall pygame`, because both packages provide the `pygame` module.
 
 ### 3. Run
 
@@ -56,51 +55,74 @@ On the first launch the face tracking model (`face_landmarker.task`, about 3.7 M
 python -m unittest discover -s tests -v
 ```
 
-The tests cover the Morse logic, the blink detector and the left/right eye mapping. They do not need a camera.
+The tests cover the Morse logic, the nose feature fusion, the press detector and the old blink detector. They do not need a camera.
 
 ---
 
 ## How to use it
 
-Sit facing the camera with your face well lit and blink with **both eyes**. All timings come from one time unit **t** (0.1 s by default, adjustable in the settings window):
+### Calibration (about 10 seconds)
 
-| Eyes | Result | With t = 0.1 s |
+Calibration starts by itself when the app opens, and again whenever you press C. A prompt at the top of the screen tells you what to do:
+
+1. "Relax your nose" for 2 s.
+2. "Flare your nostrils" for 1.5 s, then "Relax your nose" for 1.5 s. This is repeated three times.
+
+Keep your head still and do not smile during calibration. Flare the way you will flare when typing. When it finishes, the Nose flare panel shows the result:
+
+| Label | Meaning |
+|---|---|
+| good (d' 3 or more) | Rest and flare are clearly apart. Typing should be reliable |
+| weak (d' 1.5 to 3) | It works, but expect some missed or extra symbols. Try more light or a bigger flare, then press C |
+| poor (d' under 1.5) | Hard to tell apart. Move closer to the camera, improve the light, press C |
+| default weights | No flare was seen during calibration. Press C and try again |
+
+d' is the distance between "relaxed" and "flared" measured in units of the resting noise.
+
+### Typing
+
+All timings come from one time unit t (0.25 s by default, adjustable in the settings window):
+
+| Nose | Result | With t = 0.25 s |
 |---|---|---|
-| **Short blink**, shorter than 1.5 t | Dot `·` | under 0.15 s |
-| **Long blink**, 1.5 t or longer | Dash `–` | 0.15 s or more |
-| **Eyes open for 3 t** | End of letter, the Latin letter pops up | 0.3 s |
-| **Eyes open for 7 t** | End of word, a space is added | 0.7 s |
+| Short flare, shorter than 1.5 t | Dot `·` | under 0.375 s |
+| Long flare, 1.5 t or longer | Dash `–` | 0.375 s or more |
+| Relaxed for 3 t | End of letter | 0.75 s |
+| Relaxed for 7 t | End of word, a space is added | 1.75 s |
 
-These are the same ratios as classic Morse code, where silences separate letters and words. A dash is typed the moment the blink reaches 1.5 t, while your eyes are still closed, so it never waits for you to open them. A dot can only be known once your eyes open. Winking with one eye does nothing.
+A dash is typed the moment the flare reaches 1.5 t, while your nostrils are still flared. A dot can only be known once the nose relaxes.
 
-While your eyes are closed, a small outline appears after the current symbols and stretches from a dot towards a dash, and a ring next to the current letter counts down to the end of the letter once your eyes are open again.
+The readout next to your nose and the Nose flare bar show the flare score: 0 % is your relaxed nose, 100 % is your average flare from calibration. The white tick on the bar is the threshold (50 % by default), the faint tick is 100 %. The readout lights up cyan while the flare would be a dot and violet once it has become a dash.
 
-**Openness readouts.** A small glass label next to each eye shows how open that eye is, from 0 % (shut) to 100 % (your normal open eye). While both eyes are closed the labels light up cyan (the blink would be a dot) and turn violet once it has become a dash. The same values are shown as bars in the Eye openness panel, where the white tick marks the point below which an eye counts as closed.
+Smiling, opening the mouth or turning the head also changes the shape of the nose, so the app ignores the nose while any of these happen. The status line under the title says why ("Smiling, nose ignored", "Face the camera").
 
-**Example: typing "HI"**
+Example, typing "SOS": three short flares, relax 1 s, three long flares, relax 1 s, three short flares.
 
-1. Blink quickly four times (`····`), then keep your eyes open. **H** pops up after 0.3 s.
-2. Blink quickly twice (`··`) and keep your eyes open. **I** pops up.
-3. Keep them open a little longer (0.7 s in total) and a space is added.
+### Face mesh panel (debug)
 
-**Choosing t.** With 0.1 s everything is fast, which suits practised users. If letters end before you have finished them, or quick blinks come out as dashes, raise **t** to 0.15 or 0.2 s. The settings window shows what every rule means in seconds for the current value.
+The top-left panel redraws the tracked face from its 478 landmarks: the face outline in bold, the inner mesh at 20 % opacity, and both nostril areas in bold. The nostril fill gets stronger as the flare score rises, and the nostrils glow in the dot or dash colour while a flare is being typed. If the mesh shakes while your face is still, the landmarks are noisy and the flare score will be too.
 
-**Normal blinks.** People blink without thinking 15 to 20 times a minute, and those blinks are read as dots or dashes too. Press **P** to pause listening whenever you want to rest your eyes, or **Z** to hide the interface and stop input completely.
+Next to the mesh:
 
-**Hiding the interface.** Press **Z** to hide every panel and show the camera image with its normal colours. While the interface is hidden, face tracking and typing are switched off. Press **Z** again to bring everything back.
+- Yaw: how far the head is turned left or right, as seen on screen.
+- Pitch: how far the head is tilted up or down.
+- "Δ calib": the difference from the pose saved at calibration. It turns amber when it passes the limit shown at the top right (±20° for yaw, ±12° for pitch); past that limit the nose is ignored.
 
-Deleting is done on the keyboard.
-
-While a letter is in progress, the chart on the right dims every character you can no longer reach and highlights the exact match, so you never need to memorise the whole alphabet.
+Press G to show the timing legend in this panel instead.
 
 ### Keyboard shortcuts
 
 | Key | Action |
 |---|---|
+| `C` | Calibrate again |
 | `X` | Open or close the settings window |
 | `Z` | Hide or show the interface. Hidden = normal camera colours and no typing |
-| `P` | Pause or resume listening to your eyes |
+| `P` | Pause or resume listening |
 | `H` | Show or hide the Morse chart |
+| `F` | Show the feature panel: each feature's share of the flare score and its live z-score |
+| `G` | Switch the top-left panel between the face mesh and the timing legend |
+| `L` | Start or stop recording features to `logs/nose_*.csv` |
+| `N` (hold) | While recording, marks the frames where you are flaring (the `label` column) |
 | `M` | Mute or unmute sounds |
 | `Backspace` | Delete the last symbol, or the last letter if no symbol is pending |
 | `Delete` | Clear everything |
@@ -108,127 +130,103 @@ While a letter is in progress, the chart on the right dims every character you c
 
 ### Settings window
 
-![Settings window](docs/settings.png)
+Press X to open it. Changes apply instantly and are saved to `settings.json` when the app closes.
 
-Press `X` to open it. It has two tabs. Changes apply instantly and are saved to `settings.json` when the app closes.
+Camera tab: device, resolution, FPS, mirror, exposure, brightness, contrast, gain, and (on Windows) the camera driver's own dialog.
 
-**Camera tab**
-- Live stats: the real capture resolution, camera FPS and app FPS. Green is 30 FPS or more, amber is 15 to 30, red is below 15.
-- Device number, with the device name underneath on Windows (for example "Integrated Webcam" or "Camo"), resolution, target FPS (30 or 60), mirror view, auto exposure, and manual exposure, brightness, contrast and gain.
-- **Driver settings** (Windows) opens the camera maker's own settings dialog.
+Nose tab:
 
-**Eyes tab**
-- **Close threshold**: how closed an eye must be to count. An eye counts as closed when its openness drops below `1 - close threshold` (55 % by default), marked by the white tick on the openness bars.
-- **Time unit t**: the base timing, from 0.05 to 0.5 s. A card below the slider spells out the dot, dash, letter and space timings for the current value.
-- **Swap left / right eye**: for cameras or phone apps that already mirror the image. It only affects which label sits next to which eye.
+- Flare threshold: how big a flare must be to count, as a share of your average calibration flare. Lower it if short flares are missed, raise it if symbols appear on their own.
+- Time unit t: the base timing, from 0.05 to 0.6 s. A card below spells out what every rule means in seconds.
+- Smile gate: above this `mouthSmile` value the nose is ignored.
+- Use nostril darkness: turn it off when the camera cannot see your nostrils. The weights are refitted from the saved calibration frames, no new calibration needed.
+- Calibrate again: same as the C key.
 
-### Using an iPhone or Android phone as the camera
+### Tips for a good signal
 
-A phone camera is usually much sharper than a laptop webcam, and sharper eyes make blinks easier to read. Install a "phone as webcam" app such as Camo, iVCam or EpocCam on both the phone and the PC, connect the phone by USB, and the phone shows up as an extra camera. In the settings window, step **Device** to the new camera (its name is shown on Windows). Put the phone at eye level and light your face from the front.
+- Put the camera at nose height or a little lower, so it looks slightly up at the nostrils. A phone through Camo, iVCam or EpocCam is much sharper than most laptop webcams.
+- Light the face from the front. Shadows from the side change the nose shape from frame to frame.
+- Sit close enough that your face fills about a third of the picture. The nose is small; more pixels on it means less noise.
+- Choose 60 FPS if the camera supports it.
 
 ### Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| "Camera unavailable" | Close other apps using the camera (Teams, Zoom, OBS), or pick another device in the settings window. |
-| FPS below 15 | Choose 640×480 in settings, turn off auto exposure in a dark room (long exposure halves the frame rate), and plug the laptop in. |
-| Blinks are missed | Lower **Close threshold** a little. Good, even lighting on the face helps most. |
-| Quick blinks come out as dashes | Raise **Time unit t**. |
-| Letters or words end before you are done | Raise **Time unit t**. |
-| Typing feels slow | Lower **Time unit t**. |
-| Normal blinks add symbols | Press **P** while resting, or **Z** to switch input off. |
-| Input feels slow | Choose 60 FPS in settings. At 30 FPS each frame is 33 ms apart, at 60 FPS only 17 ms. |
-| Left and right are swapped | Turn on **Swap left / right eye**. |
-| Glasses | Usually fine. Strong reflections on the lenses can hide the eyelids, so tilt the screen or the light slightly. |
-| Model download fails | Download the file from the URL in `blink_morse/config.py` and save it as `models/face_landmarker.task`. |
+| Calibration says "default weights" or "poor" | More light, move closer, flare harder during the prompts, press C |
+| Short flares are missed | Lower Flare threshold, or flare a little longer |
+| Short flares come out as dashes | Raise Time unit t |
+| Symbols appear on their own | Raise Flare threshold, keep the head still, press C to recalibrate |
+| "Smiling, nose ignored" while not smiling | Raise Smile gate |
+| "nose re-centred" pops up | The score stayed high for 4 s, so the resting level was reset. If it happens often, recalibrate |
+| Letters end before you are done | Raise Time unit t |
+| "Camera unavailable" | Close other apps using the camera, or pick another device in settings |
+| FPS below 15 | Choose 640×480, turn off auto exposure in a dark room, plug the laptop in |
 
 ---
 
-## Tech stack
-
-| Part | Library | Why |
-|---|---|---|
-| Face tracking | [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker) | 478 face points plus 52 expression scores, including one blink score per eye, in real time on a normal CPU |
-| Camera | [OpenCV](https://opencv.org/) | Reads the webcam and controls exposure, brightness and so on |
-| Window and input | [pygame-ce](https://pyga.me/) | Window, keyboard, text rendering and sound playback |
-| Rendering | [ModernGL](https://github.com/moderngl/moderngl) (OpenGL 3.3) | Draws the frosted glass panels and the neon glow on the graphics card |
-| Maths | [NumPy](https://numpy.org/) | Signal maths and sound synthesis |
-| Camera names | [pygrabber](https://github.com/andreaschiavinato/python_grabber) (Windows, optional) | Lists DirectShow device names for the settings window |
-| Fonts | Inter and JetBrains Mono | Bundled in `assets/fonts` under the SIL Open Font License |
-
-No sound files and no image assets are shipped: every sound is synthesised at start-up and every shape is drawn in code.
-
----
-
-## How it works (non-technical overview)
-
-Think of the app as a small assembly line with five stations.
-
-1. **The camera takes pictures.** About 30 to 60 times a second, the webcam sends a new picture of you.
-
-2. **The face reader measures your eyes.** A pre-trained model from Google finds your face and gives each eye a score from 0 (wide open) to 1 (fully shut). Everybody's eyes rest at a slightly different level, so the app first learns what "open" looks like for you, and measures closing from there.
-
-3. **The blink reader times each blink.** It works like a telegraph key, where the length of each press matters. A short blink is a dot; as soon as a blink lasts longer than one and a half time units, it becomes a dash, without waiting for the eyes to open.
-
-4. **The Morse translator listens to the silence.** Like a radio operator, it treats a short silence as the end of a letter and a longer one as the end of a word. After three time units with your eyes open, the dots and dashes collected so far are looked up in the international Morse table. After seven, a space is added. If a code does not exist, the app shows a red question mark instead of guessing.
-
-5. **The screen shows the result.** The camera picture is dimmed and information panels that look like frosted glass float around it. A small label next to each eye shows how open it is, the newest symbol ripples when it lands, and the finished letter pops up and is added to the message at the bottom. A short sound confirms every symbol, so you can type without looking.
-
-The app never records or uploads anything. Every picture is processed in memory and thrown away straight after.
-
-## How it works (technical deep dive)
+## How it works
 
 ### Pipeline
 
 ```mermaid
 flowchart LR
     A[Camera thread<br/>OpenCV, MJPG] -->|latest frame| B[Mirror + BGR to RGB]
-    B --> C[MediaPipe Face Landmarker<br/>VIDEO mode, blendshapes]
-    C -->|eyeBlinkLeft / Right| M[Side mapping<br/>image face to user]
-    M --> D[BlinkDetector<br/>baseline, hysteresis, episodes]
+    B --> C[MediaPipe Face Landmarker<br/>landmarks, blendshapes, head pose]
+    C --> E[extract_features<br/>6 nose features]
+    E --> N[NoseSignal<br/>z-scores, LDA weights, gates, One Euro]
+    N -->|flare score| D[PressDetector<br/>hysteresis, dot / dash timing]
     D -->|DOT / DASH| F[MorseComposer<br/>pause-driven state machine]
     D -->|pause time| F
-    C -->|eye corners| G
     F --> G[HUD<br/>pygame surfaces]
     G --> H[ModernGL compositor<br/>glass + bloom shader]
     B --> H
-    I[Settings process] <-->|Pipe| J[Main loop]
 ```
 
-### Threads and processes
+### Features (`nose.py`)
 
-- **Camera thread** (`camera.py`) blocks on `VideoCapture.read()` and publishes only the newest frame through a `threading.Condition`. The main loop wakes up as soon as a frame arrives and never processes the same frame twice. `CAP_PROP_BUFFERSIZE = 1` and MJPG are requested so frames are fresh and 720p can still reach 30 to 60 FPS. On Windows the backends are tried in the order DirectShow, Media Foundation, default, which also covers virtual cameras created by phone-webcam apps.
-- **Main thread** runs detection, the blink detector, HUD drawing and the OpenGL composition, in that order. The symbol and its sound are produced before any texture upload or drawing, so rendering never adds to the reaction time.
-- **Settings process** (`settings_window.py`). The main window owns an OpenGL context, and a second SDL window in the same process can steal or invalidate it. Running the settings UI in a `spawn` child process avoids that and keeps slider dragging from stalling the render loop. Messages are small tuples over a `multiprocessing.Pipe`.
+| Feature | What it measures |
+|---|---|
+| `wing` | Distance between landmarks 129 and 358 (outer nose wings) |
+| `alar` | Distance between landmarks 48 and 278 |
+| `base` | Distance between landmarks 64 and 294 (alar base) |
+| `lower` | Distance between landmarks 98 and 327 (lower nostril edge) |
+| `sneer` | Mean of the `noseSneerLeft` and `noseSneerRight` blendshapes |
+| `dark` | Weighted darkness of the nostril openings in a face-aligned patch under the nose |
 
-### Signal: blendshapes and side mapping (`face_tracker.py`)
+The four distances are divided by the distance between the inner eye corners (133 and 362), so moving closer to the camera does not change them, and turning the head shrinks both by about the same factor.
 
-The Face Landmarker runs in `VIDEO` mode with `output_face_blendshapes=True`. Of the 52 ARKit-style blendshapes, `eyeBlinkLeft` and `eyeBlinkRight` are used. They respond to true lid closure much better than an eye-aspect-ratio computed from the mesh, whose eyelid points tend not to close fully.
+For `dark`, a patch from one alar base to the other is cut out under the nose tip and scaled by the nose width. Each pixel's darkness is `(skin - L) / skin`, where L is its lightness and `skin` the lightness of the nose bridge (landmarks 5 and 195) in the same frame. The darkness is averaged with two soft round weights placed where the nostrils sit. A continuous value is used instead of counting pixels under a fixed threshold, because a count jumps from frame to frame near the threshold.
 
-MediaPipe names both landmarks and blendshapes after the face **as depicted in the image** (see [google-ai-edge/mediapipe#6368](https://github.com/google-ai-edge/mediapipe/issues/6368)). Mirroring the frame therefore swaps them: in the default selfie view, `eyeBlinkLeft` is the user's right eye. `build_result()` applies that swap once, so every other module only sees the user's own left and right. A unit test pins this down.
+### Fusion: linear discriminant from the calibration
 
-### Blink detector (`blinks.py`)
+From the calibration frames (the first 0.45 s of every step is dropped for reaction time):
 
-**Per-user baseline.** `EyeSignal` tracks the lower envelope of each raw score while the eye is open (it falls quickly, with a 0.25 s time constant, and rises slowly, with 2 s), capped at 0.4. The normalised closure is `(raw - baseline) / (1 - baseline)`. This matters for people with narrower eyes and for laptop cameras, where looking down at the screen lowers the lids and raises the resting score.
+1. Each feature is standardised with its resting mean and noise: `z = (x - mean_rest) / std_rest`.
+2. `d` = mean z while flaring, per feature.
+3. `C` = covariance of z at rest, shrunk 30 % towards the identity because the four distances come from the same mesh and are correlated.
+4. Weights `w = C⁻¹ d` (Fisher's linear discriminant), divided by `d · C⁻¹ d` so the average calibration flare scores exactly 1.
+5. Quality `d' = sqrt(d · C⁻¹ d)`.
 
-**Hysteresis.** An eye becomes closed above `close_threshold` (0.45) and opens again below `close_threshold - 0.15`.
+A feature that does not react for a given person gets a weight near zero, so nothing has to be tuned by hand. The F panel shows each feature's share of an average flare, `w × d`, which adds up to 100 %. If calibration sees no flare (d' under 0.8), a fallback uses the mean z of the four distances and `sneer`, with a flare assumed at 3 standard deviations.
 
-**Pose per frame.** `open`, `left`, `right` or `both`. Only `both` counts as a blink; winks are ignored.
+### Running signal
 
-**Blink timing.** A blink starts on the first frame both eyes are closed. It ends when the eyes have looked open for two frames in a row (so one noisy frame cannot split a blink in two), and its end time is the first of those open frames. With time unit `t`:
+Each frame the score is `Σ w·z`, smoothed with a One Euro filter (min cutoff 2.5 Hz, beta 0.5), which smooths hard when the score is steady and lets fast changes through. The score is forced to 0 when `mouthSmile` is above the smile gate, `jawOpen` is above 0.45, or the head is more than 12° (pitch) or 20° (yaw) away from the calibrated pose.
 
-| Situation | Result | When |
-|---|---|---|
-| Blink still closed after 1.5 t | `DASH` | at 1.5 t, eyes still closed |
-| Blink ended before 1.5 t | `DOT` | when the eyes open |
+While the score is under 0.2, the resting means follow slow changes with a 6 s time constant, and with 20 s while it is between 0.2 and 90 % of the threshold, so a small posture change cannot hold the score just under the threshold. A score above the threshold for 4 s is not real typing, so the resting means are re-centred on the current values.
 
-The dash is emitted as soon as it can be told apart from a dot, which removes the wait for the eyes to open. The 1.5 t split point sits halfway between the "shorter than t" and "longer than 2 t" rule of thumb, so there is no dead zone where a blink types nothing.
+### Press detector (`press.py`)
 
-The detector also reports `closed_time` (for the live dot-to-dash preview) and `pause_time`: seconds since the eyes opened after the last blink, which the composer uses for the letter and word gaps. Calling `reset(now)` restarts that clock; the app does this when the interface is shown again with Z, so time spent hidden never counts as a pause.
+The nose counts as pressed above the threshold and released below `max(threshold - 0.15, 0.6 × threshold)`. A press ends after two relaxed frames in a row, so one noisy frame cannot split it. A dash is typed once the press is 1.5 t old, but only while the score is still above the threshold itself. MediaPipe and the filter make the score fade out over about 0.2 s after a flare, and that tail must not stretch a dot into a dash.
+
+### Feature log for analysis
+
+Press L to record, hold N while you flare, press L again to stop. Each row of `logs/nose_*.csv` holds the time, your label, the score, the raw score, whether a press was active, the gate, the calibration step, smile, jaw, pitch, yaw, the six features and their z-scores. This is enough to compare features with ROC AUC or effect size in a notebook, or to train a classifier later.
 
 ### Morse state machine (`morse.py`)
 
-`MorseComposer` knows nothing about cameras, so it can be tested with plain function calls. It is driven by symbols and by the idle time reported every frame:
+`MorseComposer` knows nothing about cameras. It is driven by symbols and by the idle time reported every frame:
 
 | State | Input | Result |
 |---|---|---|
@@ -238,27 +236,17 @@ The detector also reports `closed_time` (for the live dot-to-dash preview) and `
 | `code` already 6 symbols long | dot / dash | `INVALID` right away, since no code is longer |
 | any | Backspace | remove last symbol, otherwise last character |
 
-Both gaps are measured from the same moment, so a new symbol typed between 3 t and 7 t simply continues the same word. The table follows ITU-R M.1677-1 for A to Z, 0 to 9 and common punctuation.
+The table follows ITU-R M.1677-1 for A to Z, 0 to 9 and common punctuation.
 
-### Rendering (`compositor.py` and `hud.py`)
+### Threads, rendering and audio
 
-Each frame uploads three textures and draws one full-screen triangle strip with a single fragment shader:
+- Camera thread (`camera.py`): publishes only the newest frame, with `CAP_PROP_BUFFERSIZE = 1` and MJPG. On Windows the backends are tried in the order DirectShow, Media Foundation, default.
+- Main thread: detection, nose signal, press detector, HUD drawing and the OpenGL composition, in that order, so the symbol and its sound are produced before any drawing.
+- Settings window (`settings_window.py`): a separate `spawn` process, because a second window in the same process would fight over the OpenGL context. Messages are small tuples over a `multiprocessing.Pipe`.
+- Compositor (`compositor.py`): one fragment shader draws the camera image, frosted glass panels (up to 10) and a bloom from the glow layer.
+- Audio (`audio.py`): every sound is synthesised with NumPy at start-up, with a 256-sample mixer buffer.
 
-1. **Camera texture** with mipmaps. A cover crop (like CSS `object-fit: cover`) fills the 800×600 window at any camera aspect ratio without stretching. A moderate filter is applied: 12 % desaturation, a gentle cool tint, 14 % dimming and a soft vignette. A `u_filter` uniform blends between this look and the untouched image; the Z key animates it to 0 over about 0.2 s, which also removes the panels, glow and grain.
-2. **Glass panels.** Up to 10 rectangles are passed as uniforms, including the two openness labels that follow the eyes. A rounded-rectangle signed distance field gives anti-aliased edges, a soft drop shadow, a hairline border that is brighter at the top, and an accent colour for flashes. Inside a panel the camera is sampled at mip level 3.4 with five taps, which gives a smooth frosted blur almost for free. The glass keeps about 45 % of the blurred background's brightness with a light smoky tint, clear enough to see the room through it while white text stays readable.
-3. **Glow layer.** An opaque black pygame surface where the symbols, meters and letters are drawn again in colour. The shader adds three mip levels of it (1.0, 2.6 and 4.2), which gives the neon bloom without extra framebuffers or blur passes.
-4. **UI layer.** A transparent pygame surface with text, meters and icons, blended last. The only things placed near the face are the two openness labels: each sits just outside the outer corner of its eye (landmarks 33 and 263, mapped to the user's side like the blink scores), and its position is smoothed with a light exponential filter so the numbers do not jitter. The smoothing affects only where the label is drawn, never the input.
-5. A little animated film grain removes banding in the dark gradients.
-
-### Audio (`audio.py`)
-
-Tones are built with NumPy: a sine wave plus a soft second harmonic and a short attack and release to avoid clicks. The dash lasts three times as long as the dot, as in real Morse timing. The mixer is opened with a 256-sample buffer (about 6 ms) so the sound follows the blink closely.
-
-### Performance budget
-
-On the CPU side (camera upload, HUD drawing, layer upload) a frame takes about 10 ms. The Face Landmarker with blendshapes adds roughly 8 to 20 ms depending on the CPU, which keeps the app between 30 and 60 FPS on a typical laptop. VSync is off so the camera sets the pace and no extra frame of latency is added.
-
-End-to-end, a dash is typed one camera frame plus one detection after the blink reaches 1.5 t, and a dot two frames after the eyes open (the second frame confirms they really are open).
+The app never records or uploads camera images. Each frame is processed in memory and thrown away. The L key only writes numbers (features and scores), never pictures.
 
 ---
 
@@ -272,21 +260,27 @@ AI_computer_vision_morse_coding/
 │   ├── app.py               main loop, wires everything together
 │   ├── config.py            constants, colours, saved settings
 │   ├── camera.py            threaded webcam reader
-│   ├── face_tracker.py      MediaPipe wrapper, model download, eye mapping
-│   ├── blinks.py            blink timing detector
+│   ├── face_tracker.py      MediaPipe wrapper: landmarks, blendshapes, head pose
+│   ├── nose.py              nose features, calibration (LDA), flare score, CSV log
+│   ├── press.py             dot / dash timing from the flare score
+│   ├── blinks.py            blink detector from the eye version (not used by the app)
+│   ├── filters.py           One Euro filter
 │   ├── morse.py             Morse table and composer state machine
 │   ├── hud.py               everything drawn on top of the camera
+│   ├── face_view.py         face mesh debug view (outline, mesh, nostrils)
+│   ├── mesh_data.py         face mesh edges and nostril landmarks
 │   ├── draw.py              anti-aliased shapes, glow sprites, easing
 │   ├── compositor.py        ModernGL shader: glass panels and bloom
 │   ├── audio.py             synthesised feedback sounds
 │   └── settings_window.py   settings window (separate process)
 ├── assets/fonts/            Inter and JetBrains Mono (OFL)
 ├── models/                  face model, downloaded on first run
-├── docs/                    screenshots for this README
-└── tests/                   unit tests for Morse logic and blinks
+├── logs/                    feature CSV files (L key), not in git
+└── tests/                   unit tests, no camera needed
 ```
 
 ## Credits
 
 - Face tracking model: Google MediaPipe, Apache License 2.0.
+- One Euro filter: Casiez, Roussel and Vogel (2012), "1€ Filter: A Simple Speed-based Low-pass Filter for Noisy Input in Interactive Systems", CHI 2012.
 - Fonts: Inter by Rasmus Andersson and JetBrains Mono by JetBrains, both under the SIL Open Font License 1.1 (licence files in `assets/fonts`).

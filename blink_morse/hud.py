@@ -1,8 +1,10 @@
 """
 Everything drawn on top of the camera image.
 
-Apart from two small readouts next to the eyes, nothing is drawn on the
-face; all other feedback lives in the panels around it. The HUD paints
+Apart from one small readout next to the nose, nothing is drawn on the
+face; all other feedback lives in the panels around it. The top-left panel
+shows a redrawn face mesh with the head angles for debugging (G switches it
+to the timing legend). The HUD paints
 into two pygame surfaces every frame:
 
 * `ui`   - transparent layer with text, meters and icons.
@@ -16,15 +18,18 @@ camera behind a panel is far cheaper on the graphics card.
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
 import pygame
 
 from . import draw
 from .config import (ACCENT, ACTION_COLORS, DANGER, FONTS_DIR, MIN_ACCEPTABLE_FPS,
                      SUCCESS, TEXT, TEXT_FAINT, TEXT_MUTED, WARNING)
+from .face_view import FaceMeshView
 from .morse import MORSE_TABLE, candidates, decode
+from .nose import FEATURES, quality_label
 
 # Characters shown in the reference chart, laid out column by column.
 CHART_CHARS = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
@@ -37,11 +42,12 @@ PUNCTUATION_HINT = ". , ? ! ' / ( ) : = + - @"
 UI_CLEAR = (232, 236, 244, 0)
 
 FLASH_TIME = 0.35          # how long a legend row stays lit after an action
-CHIP_SIZE = (66, 28)       # openness readout next to each eye
-CHIP_GAP = 12              # distance between the eye corner and the readout
+CHIP_SIZE = (66, 28)       # flare readout next to the nose
+CHIP_GAP = 14              # distance between the nose wing and the readout
+FLARE_MAX = 1.5            # flare meters run from 0 to 150 % of a typical flare
 
-# Colour of an eye that is closed on its own (a wink types nothing).
-WINK_COLOR = (200, 208, 224)
+# Colours of the calibration prompts.
+PROMPT_COLORS = {"relax": ACTION_COLORS["word"], "flare": ACTION_COLORS["dash"]}
 
 
 @dataclass
@@ -51,24 +57,41 @@ class HudState:
     fps: float = 0.0
     camera_error: Optional[str] = None
     face: bool = False                   # a face is being tracked
-    # 0 = shut, 1 = fully open, after removing the user's resting level
-    openness: dict = field(default_factory=lambda: {"left": 1.0, "right": 1.0})
-    # Screen position of the readout next to each eye, or None
-    chips: dict = field(default_factory=dict)
-    open_threshold: float = 0.55         # below this an eye counts as closed
-    pose: str = "open"                   # open / left / right / both
-    closed_time: float = 0.0             # length of the current blink so far
+    nose: object = None                  # NoseResult of the last frame
+    calibration: object = None           # Calibration in use, or None
+    chip: Optional[tuple] = None         # screen position of the flare readout
+    threshold: float = 0.5               # flare score that counts as pressed
+    pressed: bool = False                # inside a flare
+    pressed_time: float = 0.0            # length of the current flare so far
     paused: bool = False                 # input ignored until P is pressed
     pause_kind: Optional[str] = None     # "letter", "space" or None
     pause_progress: float = 0.0          # 0..1 towards `pause_kind`
     pause_left: float = 0.0              # seconds until it happens
-    dash_after: float = 0.15             # blink length that makes a dash
-    letter_gap: float = 0.3
-    word_gap: float = 0.7
+    dash_after: float = 0.375            # flare length that makes a dash
+    letter_gap: float = 0.75
+    word_gap: float = 1.75
     code: str = ""
     text: str = ""
     muted: bool = False
     show_chart: bool = True
+    show_debug: bool = False             # feature weights instead of the chart
+    logging: bool = False                # features are being written to CSV
+    show_legend: bool = False            # timing legend instead of the face mesh
+    face_points: Optional[np.ndarray] = None   # landmarks in camera pixels
+    yaw: float = 0.0                     # head turn, + = towards screen right
+    pitch: float = 0.0                   # head nod, + = looking down
+    yaw_ref: float = 0.0                 # calibrated pose the gate compares with
+    pitch_ref: float = 0.0
+    max_yaw: float = 20.0                # gate limits around the calibrated pose
+    max_pitch: float = 12.0
+
+    @property
+    def calibrating(self) -> bool:
+        return self.nose is not None and self.nose.calibrating
+
+    @property
+    def flare(self) -> float:
+        return self.nose.score if (self.face and self.nose is not None) else 0.0
 
 
 @dataclass
@@ -123,12 +146,17 @@ class Hud:
         margin = 16
         self.rect_title = pygame.Rect(margin, margin, 248, 60)
         self.rect_legend = pygame.Rect(margin, 88, 248, 132)
-        self.rect_meters = pygame.Rect(margin, 232, 248, 80)
+        self.rect_face = pygame.Rect(margin, 88, 248, 232)
+        self.rect_meters = pygame.Rect(margin, self.rect_face.bottom + 12, 248, 80)
+        self.face_view = FaceMeshView()
         self.rect_fps = pygame.Rect(w - margin - 100, margin, 100, 32)
         self.rect_chart = pygame.Rect(w - margin - 212, 60, 212, 362)
         self.rect_bottom = pygame.Rect(margin, h - margin - 150, w - 2 * margin, 150)
         self.rect_error = pygame.Rect(0, 0, 320, 96)
         self.rect_error.center = (w // 2, h // 2 - 40)
+        mid = (self.rect_legend.right + self.rect_chart.left) // 2
+        self.rect_calib = pygame.Rect(0, 0, 280, 84)
+        self.rect_calib.midtop = (mid, margin)
 
         # Letters pop up high between the side panels, clear of the face.
         self.pop_center = ((self.rect_legend.right + self.rect_chart.left) / 2, 140)
@@ -168,6 +196,14 @@ class Hud:
         self._pops.append(("cleared", DANGER, now, 40))
         self._bottom_flash = (now, DANGER)
 
+    def on_calibrated(self, label: str, now: float) -> None:
+        color = SUCCESS if label == "good" else WARNING
+        self._pops.append((f"ready, {label}", color, now, 40))
+        self._bottom_flash = (now, color)
+
+    def on_recentred(self, now: float) -> None:
+        self._pops.append(("nose re-centred", WARNING, now, 32))
+
     # ------------------------------------------------------------------------
     # Frame
     # ------------------------------------------------------------------------
@@ -183,62 +219,68 @@ class Hud:
             self.blit(label, (self.size[0] - 16, 16), "topright")
             return
         self._build_panels(state, now)
-        self._draw_eye_chips(state)
+        self._draw_nose_chip(state)
 
         self._draw_title(state)
-        self._draw_legend(state, now)
+        if state.show_legend:
+            self._draw_legend(state, now)
+        else:
+            self._draw_face(state)
         self._draw_meters(state)
         self._draw_fps(state)
-        if state.show_chart:
+        if state.show_debug:
+            self._draw_debug(state)
+        elif state.show_chart:
             self._draw_chart(state)
+        if state.calibrating:
+            self._draw_calibration(state)
         self._draw_bottom(state, now)
         if state.camera_error:
             self._draw_camera_error(state)
         self._draw_pops(now)
 
     def _build_panels(self, state: HudState, now: float) -> None:
+        top = self.rect_legend if state.show_legend else self.rect_face
+        self.rect_meters.y = top.bottom + 12
         flash_t, flash_color = self._bottom_flash
         flash = max(0.0, 1.0 - (now - flash_t) / 0.6)
         self.panels = [
             Panel(self.rect_title),
-            Panel(self.rect_legend),
+            Panel(self.rect_legend if state.show_legend else self.rect_face),
             Panel(self.rect_meters),
             Panel(self.rect_fps),
             Panel(self.rect_bottom, flash, flash_color),
         ]
-        if state.show_chart:
+        if state.show_chart or state.show_debug:
             self.panels.append(Panel(self.rect_chart))
+        if state.calibrating:
+            color = PROMPT_COLORS.get(state.nose.step, ACCENT)
+            self.panels.append(Panel(self.rect_calib, 0.8, color))
         if state.camera_error:
             self.panels.append(Panel(self.rect_error, 0.6, DANGER))
-        # Glass readouts next to the eyes; the border lights up while the
-        # eye is closed, in the colour of the action it is about to trigger.
-        for side, rect in self._chip_rects(state).items():
-            closed = state.openness[side] < state.open_threshold
-            color = self._eye_color(state)
-            self.panels.append(Panel(rect, 0.9 if closed else 0.0, color))
+        # Glass readout next to the nose; the border lights up during a
+        # flare, in the colour of the symbol it is about to type.
+        rect = self._chip_rect(state)
+        if rect is not None:
+            self.panels.append(Panel(rect, 0.9 if state.pressed else 0.0,
+                                     self._press_color(state)))
 
     @staticmethod
-    def _eye_color(state: HudState) -> tuple:
+    def _press_color(state: HudState) -> tuple:
         """
-        Colour of a closed eye: while both eyes are shut it shows what the
-        blink will type if they open now (dot, then dash once it is long
-        enough). A single closed eye does nothing, so it stays neutral.
+        Colour of a flare in progress: what it will type if the nose relaxes
+        now (dot, then dash once it is long enough).
         """
-        if state.pose == "both":
-            return ACTION_COLORS["dash" if state.closed_time >= state.dash_after else "dot"]
-        return WINK_COLOR
+        if state.pressed:
+            return ACTION_COLORS["dash" if state.pressed_time >= state.dash_after else "dot"]
+        return ACTION_COLORS["dot"]
 
-    def _chip_rects(self, state: HudState) -> dict:
-        if not state.face:
-            return {}
-        rects = {}
-        for side, centre in state.chips.items():
-            if centre is None:
-                continue
-            rect = pygame.Rect((0, 0), CHIP_SIZE)
-            rect.center = (round(centre[0]), round(centre[1]))
-            rects[side] = rect
-        return rects
+    def _chip_rect(self, state: HudState):
+        if not state.face or state.chip is None:
+            return None
+        rect = pygame.Rect((0, 0), CHIP_SIZE)
+        rect.center = (round(state.chip[0]), round(state.chip[1]))
+        return rect
 
     # ------------------------------------------------------------------------
     # Text helpers
@@ -281,33 +323,50 @@ class Hud:
     # Panels
     # ------------------------------------------------------------------------
 
-    def _draw_eye_chips(self, state: HudState) -> None:
-        """Openness of each eye, as a percentage, beside the eye itself."""
-        for side, rect in self._chip_rects(state).items():
-            value = state.openness[side]
-            closed = value < state.open_threshold
-            color = self._eye_color(state)
-
-            dot = (rect.x + 13, rect.centery)
-            draw.circle(self.ui, color, dot, 3.5)
-            if closed:
-                draw.glow(self.glow, color, dot, 14, 0.8)
-            label = self.text("mono", 13, f"{round(value * 100):3d}%",
-                              color if closed else TEXT)
-            self.blit(label, (rect.right - 10, rect.centery), "midright")
+    def _draw_nose_chip(self, state: HudState) -> None:
+        """Flare as a percentage of a typical flare, beside the nose."""
+        rect = self._chip_rect(state)
+        if rect is None:
+            return
+        color = self._press_color(state)
+        dot = (rect.x + 13, rect.centery)
+        draw.circle(self.ui, color if state.pressed else TEXT_MUTED, dot, 3.5)
+        if state.pressed:
+            draw.glow(self.glow, color, dot, 14, 0.8)
+        if state.calibrating:
+            text, text_color = "cal", TEXT_MUTED
+        elif state.nose is not None and state.nose.gated:
+            text, text_color = "off", TEXT_FAINT
+        else:
+            text = f"{min(999, round(state.flare * 100)):3d}%"
+            text_color = color if state.pressed else TEXT
+        self.blit(self.text("mono", 13, text, text_color),
+                  (rect.right - 10, rect.centery), "midright")
 
     def _draw_title(self, state: HudState) -> None:
         r = self.rect_title
-        self.blit(self.text("semibold", 17, "Blink Morse", TEXT), (r.x + 16, r.y + 10))
+        self.blit(self.text("semibold", 17, "Nose Morse", TEXT), (r.x + 16, r.y + 10))
+        if state.logging:
+            draw.circle(self.ui, DANGER, (r.right - 46, r.y + 21), 3.5)
+            draw.glow(self.glow, DANGER, (r.right - 46, r.y + 21), 10, 0.6)
+            self.blit(self.text("semibold", 11, "REC", DANGER),
+                      (r.right - 16, r.y + 21), "midright")
 
+        gated = state.nose.gated if (state.face and state.nose is not None) else None
         if state.camera_error:
             dot, msg = DANGER, "Camera unavailable"
+        elif not state.face:
+            dot, msg = TEXT_FAINT, "Look at the camera"
+        elif state.calibrating:
+            dot, msg = ACCENT, "Calibrating, follow the prompt"
         elif state.paused:
             dot, msg = WARNING, "Paused, press P to listen"
-        elif state.face:
-            dot, msg = SUCCESS, "Listening"
+        elif gated:
+            dot, msg = WARNING, {"smile": "Smiling, nose ignored",
+                                 "mouth": "Mouth open, nose ignored",
+                                 "head": "Face the camera"}[gated]
         else:
-            dot, msg = TEXT_FAINT, "Look at the camera"
+            dot, msg = SUCCESS, "Listening"
 
         cy = r.y + 43
         draw.circle(self.ui, dot, (r.x + 20, cy), 3.5)
@@ -319,11 +378,53 @@ class Hud:
         def sec(v):
             return f"{round(v, 2):g} s"
         return [
-            ("dot", "Short blink", f"< {sec(state.dash_after)}  \u00b7"),
-            ("dash", "Long blink", f"\u2265 {sec(state.dash_after)}  \u2013"),
-            ("letter", f"Open {sec(state.letter_gap)}", "end letter"),
-            ("word", f"Open {sec(state.word_gap)}", "space"),
+            ("dot", "Short flare", f"< {sec(state.dash_after)}  \u00b7"),
+            ("dash", "Long flare", f"\u2265 {sec(state.dash_after)}  \u2013"),
+            ("letter", f"Relax {sec(state.letter_gap)}", "end letter"),
+            ("word", f"Relax {sec(state.word_gap)}", "space"),
         ]
+
+    def _draw_face(self, state: HudState) -> None:
+        """
+        The tracked face redrawn as a mesh on the left, head angles on the
+        right. Debug view: shows how steady the landmarks really are.
+        """
+        r = self.rect_face
+        self.blit(self.label("Face mesh"), (r.x + 16, r.y + 12))
+        area = pygame.Rect(r.x + 8, r.y + 28, 136, r.h - 36)
+        pts = state.face_points if state.face else None
+        if pts is None:
+            self.blit(self.text("regular", 12, "No face", TEXT_FAINT), area.center, "center")
+        else:
+            color = self._press_color(state) if state.pressed else ACCENT
+            fill = 0.15 + 0.55 * min(1.0, state.flare)
+            surf = self.face_view.render(pts, area.size, color, fill)
+            self.ui.blit(surf, area.topleft)
+            if state.pressed:
+                for cx, cy in self.face_view.nostril_centres:
+                    draw.glow(self.glow, color, (area.x + cx, area.y + cy), 12, 0.7)
+
+        x = r.x + 150
+        rows = (
+            ("Yaw", state.yaw, state.yaw_ref, state.max_yaw, ("left", "right")),
+            ("Pitch", state.pitch, state.pitch_ref, state.max_pitch, ("up", "down")),
+        )
+        for i, (name, value, ref, limit, words) in enumerate(rows):
+            y = r.y + 36 + i * 92
+            self.blit(self.label(name), (x, y))
+            self.blit(self.text("regular", 10, f"\u00b1{limit:.0f}\u00b0", TEXT_MUTED),
+                      (r.right - 12, y), "topright")
+            if pts is None:
+                self.blit(self.text("semibold", 20, "-", TEXT_FAINT), (x, y + 14))
+                continue
+            delta = value - ref
+            over = abs(delta) > limit
+            color = WARNING if over else TEXT
+            self.blit(self.text("semibold", 20, f"{abs(value):.1f}\u00b0", color), (x, y + 14))
+            direction = words[1] if value > 0.5 else words[0] if value < -0.5 else "centre"
+            self.blit(self.text("regular", 12, direction, TEXT_MUTED), (x, y + 42))
+            self.blit(self.text("regular", 11, f"\u0394 calib {delta:+.1f}\u00b0",
+                                WARNING if over else TEXT_FAINT), (x, y + 60))
 
     def _draw_legend(self, state: HudState, now: float) -> None:
         r = self.rect_legend
@@ -348,33 +449,107 @@ class Hud:
                       (r.right - 14, cy), "midright")
 
     def _draw_meters(self, state: HudState) -> None:
-        """Two bars showing how open each eye is, with the threshold marked."""
+        """Flare bar with the threshold marked, and the calibration status."""
         r = self.rect_meters
-        self.blit(self.label("Eye openness"), (r.x + 16, r.y + 12))
-        x0, x1 = r.x + 62, r.right - 62
-        for i, side in enumerate(("right", "left")):
-            cy = r.y + 40 + i * 24
-            color = self._eye_color(state) if state.face and \
-                state.openness.get(side, 1.0) < state.open_threshold else ACTION_COLORS["dot"]
-            value = state.openness.get(side, 1.0) if state.face else 0.0
-            closed = state.face and value < state.open_threshold
+        self.blit(self.label("Nose flare"), (r.x + 16, r.y + 12))
+        x0, x1 = r.x + 16, r.right - 62
+        cy = r.y + 40
+        value = state.flare
+        color = self._press_color(state)
 
-            self.blit(self.text("medium", 12, side.capitalize(), TEXT),
-                      (r.x + 16, cy), "midleft")
-            track = pygame.Rect(x0, cy - 3, x1 - x0, 6)
-            draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 3)
-            fill = track.copy()
-            fill.w = max(6, round(track.w * value))
-            draw.rounded_rect(self.ui, draw.with_alpha(color, 0.75), fill, 3)
-            if closed:
-                draw.glow(self.glow, color, (x0 + 4, cy), 16, 0.7)
+        track = pygame.Rect(x0, cy - 3, x1 - x0, 6)
+        draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 3)
+        fill = track.copy()
+        fill.w = max(6, round(track.w * min(1.0, value / FLARE_MAX)))
+        draw.rounded_rect(self.ui, draw.with_alpha(color, 0.75), fill, 3)
+        if state.pressed:
+            draw.glow(self.glow, color, (fill.right - 4, cy), 16, 0.7)
+        tx = x0 + track.w * min(1.0, state.threshold / FLARE_MAX)
+        draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
+        # A faint tick where an average calibration flare lands.
+        ax = x0 + track.w / FLARE_MAX
+        draw.line(self.ui, (255, 255, 255, 70), (ax, cy - 5), (ax, cy + 5), 1)
 
-            tx = x0 + track.w * state.open_threshold
-            draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
+        if not state.face:
+            status = "-"
+        elif state.calibrating:
+            status = "cal"
+        else:
+            status = f"{round(value * 100)}%"
+        self.blit(self.text("regular", 11, status, color if state.pressed else TEXT_MUTED),
+                  (r.right - 14, cy), "midright")
 
-            status = "closed" if closed else f"{round(value * 100)}%"
-            self.blit(self.text("regular", 11, status, color if closed else TEXT_MUTED),
+        cal = state.calibration
+        label = quality_label(cal)
+        if cal is None:
+            line, line_color = "Not calibrated yet", TEXT_FAINT
+        elif cal.fallback:
+            line, line_color = "Calibration: default weights, press C", WARNING
+        else:
+            line_color = SUCCESS if label == "good" else WARNING
+            line = f"Calibration: {label}, d\u2032 {cal.quality:.1f}"
+        self.blit(self.text("regular", 11, line, line_color), (r.x + 16, r.y + 62), "midleft")
+
+    def _draw_calibration(self, state: HudState) -> None:
+        """Big prompt telling the user to relax or flare, with a progress bar."""
+        r = self.rect_calib
+        n = state.nose
+        step = n.step or "relax"
+        color = PROMPT_COLORS.get(step, ACCENT)
+        title = "Flare your nostrils" if step == "flare" else "Relax your nose"
+        self.blit(self.text("semibold", 20, title, color), (r.centerx, r.y + 28), "center")
+        draw.glow(self.glow, color, (r.centerx, r.y + 28), 40, 0.25)
+        sub = f"Calibration {n.step_index + 1} / {n.step_count}  \u00b7  keep your head still"
+        self.blit(self.text("regular", 11, sub, TEXT_MUTED), (r.centerx, r.y + 52), "center")
+        track = pygame.Rect(r.x + 20, r.y + 66, r.w - 40, 5)
+        draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 2)
+        fill = track.copy()
+        fill.w = max(5, round(track.w * n.step_progress))
+        draw.rounded_rect(self.ui, draw.with_alpha(color, 0.85), fill, 2)
+
+    def _draw_debug(self, state: HudState) -> None:
+        """Each feature's weight, current z-score and share of the score (F key)."""
+        r = self.rect_chart
+        x0 = r.x + 14
+        self.blit(self.label("Features"), (x0, r.y + 14))
+        self.blit(self.text("regular", 11, "share   now z", TEXT_FAINT),
+                  (r.right - 14, r.y + 12), "topright")
+        cal = state.calibration
+        nose = state.nose
+        for i, name in enumerate(FEATURES):
+            cy = r.y + 50 + i * 40
+            w = cal.weights[i] if cal is not None else 0.0
+            # Share of an average calibration flare that this feature
+            # provides (the shares add up to 100 %).
+            share = w * cal.effect[i] * 100 if cal is not None else 0.0
+            z = nose.z[i] if (nose is not None and state.face) else 0.0
+            part = nose.contributions[i] if (nose is not None and state.face) else 0.0
+            dim = abs(w) < 1e-4
+            self.blit(self.text("medium", 13, name, TEXT_FAINT if dim else TEXT),
+                      (x0, cy), "midleft")
+            self.blit(self.text("mono", 11, f"{share:4.0f}% {z:6.1f}",
+                                TEXT_FAINT if dim else TEXT_MUTED),
                       (r.right - 14, cy), "midright")
+            # Contribution to the score: centre line = 0, full half = 1.0.
+            bar = pygame.Rect(x0, cy + 12, r.w - 28, 4)
+            draw.rounded_rect(self.ui, (255, 255, 255, 22), bar, 2)
+            half = bar.w / 2
+            length = max(-1.0, min(1.0, part)) * half
+            seg = pygame.Rect(0, bar.y, max(2, round(abs(length))), 4)
+            if length >= 0:
+                seg.x = round(bar.x + half)
+            else:
+                seg.right = round(bar.x + half)
+            col = ACTION_COLORS["dot"] if length >= 0 else DANGER
+            draw.rounded_rect(self.ui, draw.with_alpha(col, 0.85), seg, 2)
+
+        y = r.y + 50 + len(FEATURES) * 40
+        raw = nose.raw if (nose is not None and state.face) else 0.0
+        self.blit(self.text("regular", 12, f"sum {raw:+.2f}   smoothed {state.flare:.2f}",
+                            TEXT_MUTED), (x0, y), "midleft")
+        quality = "-" if cal is None else f"{cal.quality:.1f}"
+        self.blit(self.text("regular", 12, f"d\u2032 {quality}  \u00b7  F to close",
+                            TEXT_FAINT), (x0, y + 22), "midleft")
 
     def _draw_fps(self, state: HudState) -> None:
         r = self.rect_fps
@@ -468,11 +643,11 @@ class Hud:
         if dt < 0.35:
             shake = math.sin(dt * 60) * 7 * (1 - dt / 0.35)
 
-        blinking = state.pose == "both" and not state.paused
-        if state.code or blinking:
+        flaring = state.pressed and not state.paused
+        if state.code or flaring:
             end = self._draw_code(state.code, x0 + shake, cy, now)
-            if blinking:
-                self._draw_live_blink(state, end, cy)
+            if flaring:
+                self._draw_live_flare(state, end, cy)
             if state.code:
                 self._draw_prediction(state, r.right - 20, cy)
         elif state.pause_kind == "space":
@@ -487,9 +662,13 @@ class Hud:
         elif state.paused:
             self.blit(self.text("medium", 14, "Paused. Press P to start listening again",
                                 WARNING), (x0, cy), "midleft")
+        elif state.calibrating:
+            self.blit(self.text("regular", 14,
+                                "Calibrating: follow the prompt at the top of the screen",
+                                TEXT_FAINT), (x0, cy), "midleft")
         else:
             self.blit(self.text("regular", 14,
-                                "Short blink for a dot, long blink for a dash",
+                                "Short flare for a dot, long flare for a dash",
                                 TEXT_FAINT), (x0 + shake, cy), "midleft")
 
         # Divider
@@ -545,7 +724,7 @@ class Hud:
                 draw.glow(self.glow, color, (cx, cy), 24, 0.55 * grow)
                 draw.capsule(self.ui, color, (cx, cy), 34 * grow, 13 * grow)
 
-            # A quick ripple on the newest symbol confirms the blink landed.
+            # A quick ripple on the newest symbol confirms the flare landed.
             if is_last and t < 0.35:
                 k = t / 0.35
                 draw.ring(self.ui, draw.with_alpha(color, 1.0 - k), (cx, cy),
@@ -554,15 +733,15 @@ class Hud:
             x += width
         return x
 
-    def _draw_live_blink(self, state: HudState, x: float, cy: float) -> None:
+    def _draw_live_flare(self, state: HudState, x: float, cy: float) -> None:
         """
-        While both eyes are shut, show the symbol the blink will produce:
-        a dot outline that stretches into a dash as the blink gets longer.
+        While the nostrils are flared, show the symbol the flare will produce:
+        a dot outline that stretches into a dash as the flare gets longer.
         Once the dash has been typed it appears as a real symbol instead.
         """
-        if state.closed_time >= state.dash_after:
+        if state.pressed_time >= state.dash_after:
             return
-        k = state.closed_time / max(state.dash_after, 1e-3)
+        k = state.pressed_time / max(state.dash_after, 1e-3)
         color = ACTION_COLORS["dot"]
         length = 15 + 19 * k
         rect = pygame.Rect(0, 0, round(length), 15)
@@ -593,7 +772,7 @@ class Hud:
 
         left = right - 56
         if char is not None:
-            self.blit(self.text("regular", 12, "keep eyes open to confirm", TEXT_MUTED),
+            self.blit(self.text("regular", 12, "relax your nose to confirm", TEXT_MUTED),
                       (left, cy), "midright")
         elif options:
             preview = "  ".join(options[:6]) + ("  \u2026" if len(options) > 6 else "")
@@ -602,7 +781,7 @@ class Hud:
             self.blit(self.text("medium", 13, "no match", DANGER), (left, cy), "midright")
 
     def _draw_key_hints(self, right: float, cy: float, state: HudState) -> None:
-        hints = [("X", "settings"), ("Z", "hide UI"),
+        hints = [("C", "calibrate"), ("X", "settings"), ("Z", "hide UI"),
                  ("P", "resume" if state.paused else "pause"),
                  ("H", "chart"), ("M", "sound off" if state.muted else "sound")]
         x = right
