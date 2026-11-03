@@ -3,8 +3,8 @@ Wrapper around MediaPipe's Face Landmarker (Tasks API).
 
 For every frame MediaPipe returns 478 face landmarks, 52 "blendshape"
 scores that describe the expression, and a 4x4 matrix with the head pose.
-The nose input (nose.py) uses all three: the landmarks to measure the nose
-wings and find the nostrils, the `noseSneer` / `mouthSmile` / `jawOpen`
+The smile input (smile.py) uses all three: the landmarks to measure the
+mouth corners, the `mouthSmile` / `cheekSquint` / `mouthDimple`
 blendshapes, and the head pitch and yaw to ignore a turned head.
 
 The eye blink scores are still returned, and still mapped to the user's

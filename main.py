@@ -1,10 +1,10 @@
 """
-Nose Morse - type Morse code by flaring your nostrils in front of a webcam.
+Smile Morse - type Morse code by smiling in front of a webcam.
 
 Run:  python main.py
 Keys: C calibrate, X settings, Z hide UI, P pause listening, H toggle chart,
       F feature weights, G face mesh / timing legend, L record features to
-      CSV (hold N to label a flare), M mute, Backspace / Delete edit, Esc quit.
+      CSV (hold N to label a smile), M mute, Backspace / Delete edit, Esc quit.
 """
 
 import multiprocessing

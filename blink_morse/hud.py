@@ -1,7 +1,7 @@
 """
 Everything drawn on top of the camera image.
 
-Apart from one small readout next to the nose, nothing is drawn on the
+Apart from one small readout next to the mouth, nothing is drawn on the
 face; all other feedback lives in the panels around it. The top-left panel
 shows a redrawn face mesh with the head angles for debugging (G switches it
 to the timing legend). The HUD paints
@@ -29,7 +29,8 @@ from .config import (ACCENT, ACTION_COLORS, DANGER, FONTS_DIR, MIN_ACCEPTABLE_FP
                      SUCCESS, TEXT, TEXT_FAINT, TEXT_MUTED, WARNING)
 from .face_view import FaceMeshView
 from .morse import MORSE_TABLE, candidates, decode
-from .nose import FEATURES, quality_label
+from .fusion import quality_label
+from .smile import FEATURES
 
 # Characters shown in the reference chart, laid out column by column.
 CHART_CHARS = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
@@ -42,12 +43,12 @@ PUNCTUATION_HINT = ". , ? ! ' / ( ) : = + - @"
 UI_CLEAR = (232, 236, 244, 0)
 
 FLASH_TIME = 0.35          # how long a legend row stays lit after an action
-CHIP_SIZE = (66, 28)       # flare readout next to the nose
-CHIP_GAP = 14              # distance between the nose wing and the readout
-FLARE_MAX = 1.5            # flare meters run from 0 to 150 % of a typical flare
+CHIP_SIZE = (66, 28)       # smile readout next to the mouth
+CHIP_GAP = 14              # distance between the mouth corner and the readout
+SCORE_MAX = 1.5            # smile meters run from 0 to 150 % of a typical smile
 
 # Colours of the calibration prompts.
-PROMPT_COLORS = {"relax": ACTION_COLORS["word"], "flare": ACTION_COLORS["dash"]}
+PROMPT_COLORS = {"relax": ACTION_COLORS["word"], "smile": ACTION_COLORS["dash"]}
 
 
 @dataclass
@@ -57,17 +58,17 @@ class HudState:
     fps: float = 0.0
     camera_error: Optional[str] = None
     face: bool = False                   # a face is being tracked
-    nose: object = None                  # NoseResult of the last frame
+    signal: object = None                # SignalResult of the last frame
     calibration: object = None           # Calibration in use, or None
-    chip: Optional[tuple] = None         # screen position of the flare readout
-    threshold: float = 0.5               # flare score that counts as pressed
-    pressed: bool = False                # inside a flare
-    pressed_time: float = 0.0            # length of the current flare so far
+    chip: Optional[tuple] = None         # screen position of the smile readout
+    threshold: float = 0.5               # smile score that counts as pressed
+    pressed: bool = False                # inside a smile
+    pressed_time: float = 0.0            # length of the current smile so far
     paused: bool = False                 # input ignored until P is pressed
     pause_kind: Optional[str] = None     # "letter", "space" or None
     pause_progress: float = 0.0          # 0..1 towards `pause_kind`
     pause_left: float = 0.0              # seconds until it happens
-    dash_after: float = 0.375            # flare length that makes a dash
+    dash_after: float = 0.375            # smile length that makes a dash
     letter_gap: float = 0.75
     word_gap: float = 1.75
     code: str = ""
@@ -87,11 +88,11 @@ class HudState:
 
     @property
     def calibrating(self) -> bool:
-        return self.nose is not None and self.nose.calibrating
+        return self.signal is not None and self.signal.calibrating
 
     @property
-    def flare(self) -> float:
-        return self.nose.score if (self.face and self.nose is not None) else 0.0
+    def level(self) -> float:
+        return self.signal.score if (self.face and self.signal is not None) else 0.0
 
 
 @dataclass
@@ -202,7 +203,7 @@ class Hud:
         self._bottom_flash = (now, color)
 
     def on_recentred(self, now: float) -> None:
-        self._pops.append(("nose re-centred", WARNING, now, 32))
+        self._pops.append(("face re-centred", WARNING, now, 32))
 
     # ------------------------------------------------------------------------
     # Frame
@@ -219,7 +220,7 @@ class Hud:
             self.blit(label, (self.size[0] - 16, 16), "topright")
             return
         self._build_panels(state, now)
-        self._draw_nose_chip(state)
+        self._draw_chip(state)
 
         self._draw_title(state)
         if state.show_legend:
@@ -254,12 +255,12 @@ class Hud:
         if state.show_chart or state.show_debug:
             self.panels.append(Panel(self.rect_chart))
         if state.calibrating:
-            color = PROMPT_COLORS.get(state.nose.step, ACCENT)
+            color = PROMPT_COLORS.get(state.signal.step, ACCENT)
             self.panels.append(Panel(self.rect_calib, 0.8, color))
         if state.camera_error:
             self.panels.append(Panel(self.rect_error, 0.6, DANGER))
-        # Glass readout next to the nose; the border lights up during a
-        # flare, in the colour of the symbol it is about to type.
+        # Glass readout next to the mouth; the border lights up during a
+        # smile, in the colour of the symbol it is about to type.
         rect = self._chip_rect(state)
         if rect is not None:
             self.panels.append(Panel(rect, 0.9 if state.pressed else 0.0,
@@ -268,7 +269,7 @@ class Hud:
     @staticmethod
     def _press_color(state: HudState) -> tuple:
         """
-        Colour of a flare in progress: what it will type if the nose relaxes
+        Colour of a smile in progress: what it will type if the face relaxes
         now (dot, then dash once it is long enough).
         """
         if state.pressed:
@@ -323,8 +324,8 @@ class Hud:
     # Panels
     # ------------------------------------------------------------------------
 
-    def _draw_nose_chip(self, state: HudState) -> None:
-        """Flare as a percentage of a typical flare, beside the nose."""
+    def _draw_chip(self, state: HudState) -> None:
+        """Smile as a percentage of a typical smile, beside the mouth."""
         rect = self._chip_rect(state)
         if rect is None:
             return
@@ -335,24 +336,24 @@ class Hud:
             draw.glow(self.glow, color, dot, 14, 0.8)
         if state.calibrating:
             text, text_color = "cal", TEXT_MUTED
-        elif state.nose is not None and state.nose.gated:
+        elif state.signal is not None and state.signal.gated:
             text, text_color = "off", TEXT_FAINT
         else:
-            text = f"{min(999, round(state.flare * 100)):3d}%"
+            text = f"{min(999, round(state.level * 100)):3d}%"
             text_color = color if state.pressed else TEXT
         self.blit(self.text("mono", 13, text, text_color),
                   (rect.right - 10, rect.centery), "midright")
 
     def _draw_title(self, state: HudState) -> None:
         r = self.rect_title
-        self.blit(self.text("semibold", 17, "Nose Morse", TEXT), (r.x + 16, r.y + 10))
+        self.blit(self.text("semibold", 17, "Smile Morse", TEXT), (r.x + 16, r.y + 10))
         if state.logging:
             draw.circle(self.ui, DANGER, (r.right - 46, r.y + 21), 3.5)
             draw.glow(self.glow, DANGER, (r.right - 46, r.y + 21), 10, 0.6)
             self.blit(self.text("semibold", 11, "REC", DANGER),
                       (r.right - 16, r.y + 21), "midright")
 
-        gated = state.nose.gated if (state.face and state.nose is not None) else None
+        gated = state.signal.gated if (state.face and state.signal is not None) else None
         if state.camera_error:
             dot, msg = DANGER, "Camera unavailable"
         elif not state.face:
@@ -362,9 +363,7 @@ class Hud:
         elif state.paused:
             dot, msg = WARNING, "Paused, press P to listen"
         elif gated:
-            dot, msg = WARNING, {"smile": "Smiling, nose ignored",
-                                 "mouth": "Mouth open, nose ignored",
-                                 "head": "Face the camera"}[gated]
+            dot, msg = WARNING, {"head": "Face the camera"}.get(gated, "Input ignored")
         else:
             dot, msg = SUCCESS, "Listening"
 
@@ -378,8 +377,8 @@ class Hud:
         def sec(v):
             return f"{round(v, 2):g} s"
         return [
-            ("dot", "Short flare", f"< {sec(state.dash_after)}  \u00b7"),
-            ("dash", "Long flare", f"\u2265 {sec(state.dash_after)}  \u2013"),
+            ("dot", "Short smile", f"< {sec(state.dash_after)}  \u00b7"),
+            ("dash", "Long smile", f"\u2265 {sec(state.dash_after)}  \u2013"),
             ("letter", f"Relax {sec(state.letter_gap)}", "end letter"),
             ("word", f"Relax {sec(state.word_gap)}", "space"),
         ]
@@ -397,11 +396,11 @@ class Hud:
             self.blit(self.text("regular", 12, "No face", TEXT_FAINT), area.center, "center")
         else:
             color = self._press_color(state) if state.pressed else ACCENT
-            fill = 0.15 + 0.55 * min(1.0, state.flare)
+            fill = 0.15 + 0.55 * min(1.0, state.level)
             surf = self.face_view.render(pts, area.size, color, fill)
             self.ui.blit(surf, area.topleft)
             if state.pressed:
-                for cx, cy in self.face_view.nostril_centres:
+                for cx, cy in self.face_view.highlight_centres:
                     draw.glow(self.glow, color, (area.x + cx, area.y + cy), 12, 0.7)
 
         x = r.x + 150
@@ -417,14 +416,16 @@ class Hud:
             if pts is None:
                 self.blit(self.text("semibold", 20, "-", TEXT_FAINT), (x, y + 14))
                 continue
+            calibrated = state.calibration is not None
             delta = value - ref
-            over = abs(delta) > limit
+            over = calibrated and abs(delta) > limit
             color = WARNING if over else TEXT
             self.blit(self.text("semibold", 20, f"{abs(value):.1f}\u00b0", color), (x, y + 14))
             direction = words[1] if value > 0.5 else words[0] if value < -0.5 else "centre"
             self.blit(self.text("regular", 12, direction, TEXT_MUTED), (x, y + 42))
-            self.blit(self.text("regular", 11, f"\u0394 calib {delta:+.1f}\u00b0",
-                                WARNING if over else TEXT_FAINT), (x, y + 60))
+            note = f"\u0394 calib {delta:+.1f}\u00b0" if calibrated else "not calibrated"
+            self.blit(self.text("regular", 11, note, WARNING if over else TEXT_FAINT),
+                      (x, y + 60))
 
     def _draw_legend(self, state: HudState, now: float) -> None:
         r = self.rect_legend
@@ -449,25 +450,25 @@ class Hud:
                       (r.right - 14, cy), "midright")
 
     def _draw_meters(self, state: HudState) -> None:
-        """Flare bar with the threshold marked, and the calibration status."""
+        """Smile bar with the threshold marked, and the calibration status."""
         r = self.rect_meters
-        self.blit(self.label("Nose flare"), (r.x + 16, r.y + 12))
+        self.blit(self.label("Smile"), (r.x + 16, r.y + 12))
         x0, x1 = r.x + 16, r.right - 62
         cy = r.y + 40
-        value = state.flare
+        value = state.level
         color = self._press_color(state)
 
         track = pygame.Rect(x0, cy - 3, x1 - x0, 6)
         draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 3)
         fill = track.copy()
-        fill.w = max(6, round(track.w * min(1.0, value / FLARE_MAX)))
+        fill.w = max(6, round(track.w * min(1.0, value / SCORE_MAX)))
         draw.rounded_rect(self.ui, draw.with_alpha(color, 0.75), fill, 3)
         if state.pressed:
             draw.glow(self.glow, color, (fill.right - 4, cy), 16, 0.7)
-        tx = x0 + track.w * min(1.0, state.threshold / FLARE_MAX)
+        tx = x0 + track.w * min(1.0, state.threshold / SCORE_MAX)
         draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
-        # A faint tick where an average calibration flare lands.
-        ax = x0 + track.w / FLARE_MAX
+        # A faint tick where an average calibration smile lands.
+        ax = x0 + track.w / SCORE_MAX
         draw.line(self.ui, (255, 255, 255, 70), (ax, cy - 5), (ax, cy + 5), 1)
 
         if not state.face:
@@ -491,12 +492,12 @@ class Hud:
         self.blit(self.text("regular", 11, line, line_color), (r.x + 16, r.y + 62), "midleft")
 
     def _draw_calibration(self, state: HudState) -> None:
-        """Big prompt telling the user to relax or flare, with a progress bar."""
+        """Big prompt telling the user to relax or smile, with a progress bar."""
         r = self.rect_calib
-        n = state.nose
+        n = state.signal
         step = n.step or "relax"
         color = PROMPT_COLORS.get(step, ACCENT)
-        title = "Flare your nostrils" if step == "flare" else "Relax your nose"
+        title = "Smile, lips closed" if step == "smile" else "Relax your face"
         self.blit(self.text("semibold", 20, title, color), (r.centerx, r.y + 28), "center")
         draw.glow(self.glow, color, (r.centerx, r.y + 28), 40, 0.25)
         sub = f"Calibration {n.step_index + 1} / {n.step_count}  \u00b7  keep your head still"
@@ -515,15 +516,16 @@ class Hud:
         self.blit(self.text("regular", 11, "share   now z", TEXT_FAINT),
                   (r.right - 14, r.y + 12), "topright")
         cal = state.calibration
-        nose = state.nose
+        sig = state.signal
         for i, name in enumerate(FEATURES):
             cy = r.y + 50 + i * 40
             w = cal.weights[i] if cal is not None else 0.0
-            # Share of an average calibration flare that this feature
+            # Share of an average calibration smile that this feature
             # provides (the shares add up to 100 %).
             share = w * cal.effect[i] * 100 if cal is not None else 0.0
-            z = nose.z[i] if (nose is not None and state.face) else 0.0
-            part = nose.contributions[i] if (nose is not None and state.face) else 0.0
+            live = sig is not None and state.face and len(sig.z) == len(FEATURES)
+            z = sig.z[i] if live else 0.0
+            part = sig.contributions[i] if live else 0.0
             dim = abs(w) < 1e-4
             self.blit(self.text("medium", 13, name, TEXT_FAINT if dim else TEXT),
                       (x0, cy), "midleft")
@@ -544,8 +546,8 @@ class Hud:
             draw.rounded_rect(self.ui, draw.with_alpha(col, 0.85), seg, 2)
 
         y = r.y + 50 + len(FEATURES) * 40
-        raw = nose.raw if (nose is not None and state.face) else 0.0
-        self.blit(self.text("regular", 12, f"sum {raw:+.2f}   smoothed {state.flare:.2f}",
+        raw = sig.raw if (sig is not None and state.face) else 0.0
+        self.blit(self.text("regular", 12, f"sum {raw:+.2f}   smoothed {state.level:.2f}",
                             TEXT_MUTED), (x0, y), "midleft")
         quality = "-" if cal is None else f"{cal.quality:.1f}"
         self.blit(self.text("regular", 12, f"d\u2032 {quality}  \u00b7  F to close",
@@ -647,7 +649,7 @@ class Hud:
         if state.code or flaring:
             end = self._draw_code(state.code, x0 + shake, cy, now)
             if flaring:
-                self._draw_live_flare(state, end, cy)
+                self._draw_live_smile(state, end, cy)
             if state.code:
                 self._draw_prediction(state, r.right - 20, cy)
         elif state.pause_kind == "space":
@@ -668,7 +670,7 @@ class Hud:
                                 TEXT_FAINT), (x0, cy), "midleft")
         else:
             self.blit(self.text("regular", 14,
-                                "Short flare for a dot, long flare for a dash",
+                                "Short smile for a dot, long smile for a dash",
                                 TEXT_FAINT), (x0 + shake, cy), "midleft")
 
         # Divider
@@ -724,7 +726,7 @@ class Hud:
                 draw.glow(self.glow, color, (cx, cy), 24, 0.55 * grow)
                 draw.capsule(self.ui, color, (cx, cy), 34 * grow, 13 * grow)
 
-            # A quick ripple on the newest symbol confirms the flare landed.
+            # A quick ripple on the newest symbol confirms the smile landed.
             if is_last and t < 0.35:
                 k = t / 0.35
                 draw.ring(self.ui, draw.with_alpha(color, 1.0 - k), (cx, cy),
@@ -733,10 +735,10 @@ class Hud:
             x += width
         return x
 
-    def _draw_live_flare(self, state: HudState, x: float, cy: float) -> None:
+    def _draw_live_smile(self, state: HudState, x: float, cy: float) -> None:
         """
-        While the nostrils are flared, show the symbol the flare will produce:
-        a dot outline that stretches into a dash as the flare gets longer.
+        While smiling, show the symbol the smile will produce: a dot
+        outline that stretches into a dash as the smile gets longer.
         Once the dash has been typed it appears as a real symbol instead.
         """
         if state.pressed_time >= state.dash_after:
@@ -772,7 +774,7 @@ class Hud:
 
         left = right - 56
         if char is not None:
-            self.blit(self.text("regular", 12, "relax your nose to confirm", TEXT_MUTED),
+            self.blit(self.text("regular", 12, "relax your face to confirm", TEXT_MUTED),
                       (left, cy), "midright")
         elif options:
             preview = "  ".join(options[:6]) + ("  \u2026" if len(options) > 6 else "")

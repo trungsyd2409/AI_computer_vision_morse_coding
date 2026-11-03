@@ -7,7 +7,8 @@ panel and drawn as lines only:
 * the inner mesh faintly (opacity 0.2), so jitter in the landmarks is easy
   to see without hiding everything else,
 * the face outline bold,
-* each nostril area bold, filled more strongly as the flare score rises.
+* the part of the face that types (the lips in Smile Morse) bold, filled
+  more strongly as the score rises.
 
 Lines are drawn with OpenCV into one 8-bit coverage mask per layer (one C
 call for all 1322 mesh edges) and the masks are merged into an RGBA image.
@@ -21,7 +22,7 @@ import cv2
 import numpy as np
 import pygame
 
-from .mesh_data import FACE_OVAL, NOSTRILS, TESSELATION
+from .mesh_data import FACE_OVAL, INNER_LIPS, OUTER_LIPS, TESSELATION
 
 MESH_ALPHA = 0.20          # inner mesh lines
 OVAL_ALPHA = 0.95          # face outline
@@ -30,20 +31,25 @@ SHIFT = 4                  # OpenCV sub-pixel bits: coordinates are x16
 
 
 class FaceMeshView:
-    def __init__(self):
+    def __init__(self, bold_loops=(OUTER_LIPS, INNER_LIPS), fill_loops=(OUTER_LIPS,)):
+        """
+        bold_loops: closed landmark loops drawn bold in the highlight colour
+        fill_loops: closed landmark loops filled with the highlight colour
+        """
         self._edges = np.array(TESSELATION, dtype=np.int32)
         self._oval = np.array(FACE_OVAL, dtype=np.int32)
-        self._nostrils = [np.array(n, dtype=np.int32) for n in NOSTRILS]
+        self._bold = [np.array(loop, dtype=np.int32) for loop in bold_loops]
+        self._fill = [np.array(loop, dtype=np.int32) for loop in fill_loops]
         self._buffer = None            # keeps the bytes behind the surface alive
-        self.nostril_centres = []      # panel pixels, for the glow
+        self.highlight_centres = []    # panel pixels of each filled area, for the glow
 
-    def render(self, points: np.ndarray, size: tuple, nostril_color: tuple,
+    def render(self, points: np.ndarray, size: tuple, color: tuple,
                fill: float = 0.3, pad: int = 6) -> Optional[pygame.Surface]:
         """
-        points:        (478, 2) landmarks in camera pixels
-        size:          (width, height) of the drawing area
-        nostril_color: RGB of the nostril outline and fill
-        fill:          0..1 opacity of the nostril fill
+        points: (478, 2) landmarks in camera pixels
+        size:   (width, height) of the drawing area
+        color:  RGB of the highlighted part
+        fill:   0..1 opacity of the highlight fill
         """
         w, h = size
         oval = points[self._oval]
@@ -58,24 +64,25 @@ class FaceMeshView:
         outline = np.zeros((h, w), np.uint8)
         cv2.polylines(outline, [q16[self._oval]], True, 255, 2, cv2.LINE_AA, SHIFT)
 
-        nose_line = np.zeros((h, w), np.uint8)
-        nose_fill = np.zeros((h, w), np.uint8)
-        self.nostril_centres = []
-        for idx in self._nostrils:
-            hull = cv2.convexHull(q16[idx])
-            cv2.fillConvexPoly(nose_fill, hull, 255, cv2.LINE_AA, SHIFT)
-            cv2.polylines(nose_line, [hull], True, 255, 2, cv2.LINE_AA, SHIFT)
-            self.nostril_centres.append(tuple(q[idx].mean(axis=0)))
+        bold = np.zeros((h, w), np.uint8)
+        if self._bold:
+            cv2.polylines(bold, [q16[loop] for loop in self._bold], True, 255, 2,
+                          cv2.LINE_AA, SHIFT)
+        filled = np.zeros((h, w), np.uint8)
+        if self._fill:
+            cv2.fillPoly(filled, [q16[loop] for loop in self._fill], 255,
+                         cv2.LINE_AA, SHIFT)
+        self.highlight_centres = [tuple(q[loop].mean(axis=0)) for loop in self._fill]
 
         alpha = np.maximum.reduce([
             mesh * MESH_ALPHA,
             outline * OVAL_ALPHA,
-            nose_line.astype(np.float32),
-            nose_fill * float(np.clip(fill, 0.0, 1.0)),
+            bold.astype(np.float32),
+            filled * float(np.clip(fill, 0.0, 1.0)),
         ])
         rgba = np.empty((h, w, 4), np.uint8)
         rgba[:, :, :3] = LINE_COLOR
-        rgba[np.maximum(nose_line, nose_fill) > 0, :3] = nostril_color[:3]
+        rgba[np.maximum(bold, filled) > 0, :3] = color[:3]
         rgba[:, :, 3] = np.clip(alpha, 0, 255).astype(np.uint8)
 
         self._buffer = rgba.tobytes()

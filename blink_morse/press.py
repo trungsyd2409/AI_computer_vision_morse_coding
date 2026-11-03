@@ -2,14 +2,14 @@
 Turns one "press" score per frame into Morse dots and dashes, the way a
 telegraph key uses the length of each press.
 
-The score comes from the nose (see nose.py): 0 = relaxed, 1 = a typical
-flare from calibration. The nose counts as pressed above `threshold` and
-as released below a slightly lower level, so noise around the threshold
-cannot type a burst of symbols.
+The score comes from the face (see smile.py and fusion.py): 0 = relaxed,
+1 = a typical smile from calibration. It counts as pressed above
+`threshold` and as released below a slightly lower level, so noise around
+the threshold cannot type a burst of symbols.
 
 Timing, all in one time unit `t`:
 
-* pressed for less than 1.5 t  -> DOT   (typed when the nose relaxes)
+* pressed for less than 1.5 t  -> DOT   (typed when the face relaxes)
 * pressed for 1.5 t or longer  -> DASH  (typed the moment 1.5 t is reached,
                                          if the score is still above the
                                          threshold at that moment)
@@ -92,7 +92,7 @@ class PressDetector:
             self._release_frames = 0
             # The dash needs the score above the threshold itself, not just
             # above the release level: the tracker and the filter make the
-            # score fade out slowly after a short flare, and that tail must
+            # score fade out slowly after a short smile, and that tail must
             # not stretch a dot into a dash.
             if (not self._dash_fired and score >= self.threshold
                     and now - self.pressed_since >= self.dash_after):

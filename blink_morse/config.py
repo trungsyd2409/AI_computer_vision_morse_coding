@@ -42,7 +42,7 @@ FACE_MODEL_URL = (
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Nose Morse"
+APP_TITLE = "Smile Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -62,8 +62,8 @@ DANGER = (251, 113, 133)
 # One colour per action so the legend, the meters, the typed symbols and
 # the pause countdown all speak the same visual language.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # short flare
-    "dash": (167, 139, 250),      # long flare
+    "dot": (103, 232, 249),       # short smile
+    "dash": (167, 139, 250),      # long smile
     "letter": (251, 191, 36),     # short pause -> end of letter
     "word": (74, 222, 128),       # long pause  -> space
 }
@@ -97,22 +97,16 @@ class CameraSettings:
 
 
 @dataclass
-class NoseSettings:
-    """Threshold and timing for reading nostril flares."""
+class SmileSettings:
+    """Threshold and timing for reading smiles."""
 
-    # The flare score is 0 with the nose relaxed and 1 for an average flare
-    # from calibration. Above `threshold` the nose counts as pressed.
+    # The smile score is 0 with a relaxed face and 1 for an average smile
+    # from calibration. Above `threshold` the smile counts as pressed.
     threshold: float = 0.50
     # The Morse time unit t, in seconds. Everything is derived from it:
-    # flare < 1.5 t = dot, >= 1.5 t = dash, relaxed 3 t = end of letter,
-    # relaxed 7 t = end of word. Slower than the blink version (0.1 s)
-    # because the nose muscles and the smoothing filter are slower.
+    # smile < 1.5 t = dot, >= 1.5 t = dash, relaxed 3 t = end of letter,
+    # relaxed 7 t = end of word.
     time_unit: float = 0.25
-    # mouthSmile above this ignores the nose: smiling widens it too.
-    smile_gate: float = 0.35
-    # Include the darkness of the nostril openings. Turn it off when the
-    # camera cannot see the nostrils (camera above the face, dim light).
-    use_dark: bool = True
 
     @property
     def dash_after(self) -> float:
@@ -130,7 +124,7 @@ class NoseSettings:
 @dataclass
 class AppSettings:
     camera: CameraSettings = field(default_factory=CameraSettings)
-    nose: NoseSettings = field(default_factory=NoseSettings)
+    smile: SmileSettings = field(default_factory=SmileSettings)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -146,7 +140,7 @@ class AppSettings:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             return settings
-        for name in ("camera", "nose"):
+        for name in ("camera", "smile"):
             section = getattr(settings, name)
             saved = data.get(name, {})
             for f in fields(section):

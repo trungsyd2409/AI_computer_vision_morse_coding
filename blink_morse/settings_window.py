@@ -1,5 +1,5 @@
 """
-Settings window with two tabs: Camera and Nose.
+Settings window with two tabs: Camera and Smile.
 
 It runs in a separate process with its own pygame window. The main window
 uses an OpenGL context, and a second window in the same process would
@@ -26,7 +26,7 @@ from .config import (ACCENT, ACTION_COLORS, DANGER, FPS_CHOICES, MIN_ACCEPTABLE_
 
 ROW_H = 32
 PAD = 24
-TABS = [("Camera", "camera"), ("Nose", "nose")]
+TABS = [("Camera", "camera"), ("Smile", "smile")]
 
 
 def list_camera_names() -> list:
@@ -139,7 +139,7 @@ class SettingsWindow:
         self.conn = conn
         self.fonts = Fonts()
         self.values = {"camera": dict(initial["camera"]),
-                       "nose": dict(initial["nose"])}
+                       "smile": dict(initial["smile"])}
         self.stats = {}
         self.camera_names = list_camera_names()
         self.tab = "camera"
@@ -156,7 +156,7 @@ class SettingsWindow:
 
     def _build_widgets(self) -> None:
         cam = self.values["camera"]
-        nose = self.values["nose"]
+        smile = self.values["smile"]
         w = SETTINGS_SIZE[0] - 2 * PAD
         self.tab_bar = TabBar(TABS, self.tab)
         self.tab_bar.rect = self.pg.Rect(PAD, 150, w, 34)
@@ -186,14 +186,11 @@ class SettingsWindow:
                 Slider("Contrast", "camera", "contrast", cam["contrast"], 0, 255, 1, "{:.0f}"),
                 Slider("Gain", "camera", "gain", cam["gain"], 0, 255, 1, "{:.0f}"),
             ]),
-            "nose": page([
-                Slider("Flare threshold", "nose", "threshold",
-                       nose["threshold"], 0.10, 0.90, 0.01, "{:.0%}"),
-                Slider("Time unit t", "nose", "time_unit",
-                       nose["time_unit"], 0.05, 0.60, 0.01, "{:.2f} s"),
-                Slider("Smile gate", "nose", "smile_gate",
-                       nose["smile_gate"], 0.10, 0.90, 0.01, "{:.2f}"),
-                Toggle("Use nostril darkness", "nose", "use_dark", nose["use_dark"]),
+            "smile": page([
+                Slider("Smile threshold", "smile", "threshold",
+                       smile["threshold"], 0.05, 0.95, 0.01, "{:.0%}"),
+                Slider("Time unit t", "smile", "time_unit",
+                       smile["time_unit"], 0.05, 0.60, 0.01, "{:.2f} s"),
                 Button("Calibrate again (C)", "calibrate", None),
             ]),
         }
@@ -281,11 +278,11 @@ class SettingsWindow:
         self.conn.send(change)
 
     def _reset(self) -> None:
-        from .config import CameraSettings, NoseSettings
+        from .config import CameraSettings, SmileSettings
         from dataclasses import asdict
-        cam, nose = asdict(CameraSettings()), asdict(NoseSettings())
+        cam, smile = asdict(CameraSettings()), asdict(SmileSettings())
         cam["index"] = self.values["camera"]["index"]
-        self.values = {"camera": cam, "nose": nose}
+        self.values = {"camera": cam, "smile": smile}
         self._build_widgets()
 
     def _read_pipe(self) -> bool:
@@ -349,7 +346,7 @@ class SettingsWindow:
             enabled = self._enabled(widget)
             widget.draw(s, self, hover=(widget is self.hover), enabled=enabled)
 
-        if self.tab == "nose":
+        if self.tab == "smile":
             self._draw_timing_card()
 
     def _draw_timing_card(self) -> None:
@@ -357,8 +354,8 @@ class SettingsWindow:
         pg = self.pg
         from . import draw
         s = self.screen
-        t = self.values["nose"]["time_unit"]
-        last = self.pages["nose"][-1].rect
+        t = self.values["smile"]["time_unit"]
+        last = self.pages["smile"][-1].rect
         card = pg.Rect(PAD, last.bottom + 18, SETTINGS_SIZE[0] - 2 * PAD, 138)
         layer = pg.Surface(card.size, pg.SRCALPHA)
         draw.rounded_rect(layer, (255, 255, 255, 12), layer.get_rect(), 12)
@@ -367,10 +364,10 @@ class SettingsWindow:
         s.blit(self._label("Timing"), (card.x + 16, card.y + 14))
 
         rows = [
-            (ACTION_COLORS["dot"], "Dot", f"flare shorter than {1.5 * t:.2f} s"),
-            (ACTION_COLORS["dash"], "Dash", f"flare {1.5 * t:.2f} s or longer"),
-            (ACTION_COLORS["letter"], "End letter", f"nose relaxed {3 * t:.2f} s"),
-            (ACTION_COLORS["word"], "Space", f"nose relaxed {7 * t:.2f} s"),
+            (ACTION_COLORS["dot"], "Dot", f"smile shorter than {1.5 * t:.2f} s"),
+            (ACTION_COLORS["dash"], "Dash", f"smile {1.5 * t:.2f} s or longer"),
+            (ACTION_COLORS["letter"], "End letter", f"face relaxed {3 * t:.2f} s"),
+            (ACTION_COLORS["word"], "Space", f"face relaxed {7 * t:.2f} s"),
         ]
         for i, (color, name, rule) in enumerate(rows):
             cy = card.y + 46 + i * 24

@@ -145,6 +145,13 @@ TESSELATION = tuple(zip(_TESSELATION_FLAT[0::2], _TESSELATION_FLAT[1::2]))
 # Outline of the face, in order around the face.
 FACE_OVAL = (10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109)
 
+# Lips as closed loops, in order: outer edge of both lips, then the inner
+# edge (the line where the lips meet, or the mouth opening).
+OUTER_LIPS = (61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291,
+              375, 321, 405, 314, 17, 84, 181, 91, 146)
+INNER_LIPS = (78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308,
+              324, 318, 402, 317, 14, 87, 178, 88, 95)
+
 # Landmarks around each nostril opening (the dense band of small triangles
 # under the nose). The two sets are mirror images of each other; the
 # nostril area is drawn as the convex hull of each set.
