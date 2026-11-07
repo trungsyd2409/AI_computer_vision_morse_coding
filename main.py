@@ -1,10 +1,11 @@
 """
-Smile Morse - type Morse code by smiling in front of a webcam.
+Ear Morse - type Morse code by moving your ears in front of a webcam.
 
 Run:  python main.py
-Keys: C calibrate, X settings, Z hide UI, P pause listening, H toggle chart,
-      F feature weights, G face mesh / timing legend, L record features to
-      CSV (hold N to label a smile), M mute, Backspace / Delete edit, Esc quit.
+Keys: C calibrate, T hold / twitch mode, X settings, Z hide UI, P pause
+      listening, H toggle chart, F feature weights, G ear view / timing
+      legend, L record features to CSV (hold N to label a wiggle), M mute,
+      Backspace / Delete edit, Esc quit.
 """
 
 import multiprocessing

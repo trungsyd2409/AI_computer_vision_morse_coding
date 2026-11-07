@@ -1,3 +1,3 @@
-"""Smile Morse: type Morse code by smiling at a webcam."""
+"""Ear Morse: type Morse code by moving your ears in front of a webcam."""
 
-__version__ = "4.0.0"
+__version__ = "6.0.0"

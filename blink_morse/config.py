@@ -42,7 +42,7 @@ FACE_MODEL_URL = (
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Smile Morse"
+APP_TITLE = "Ear Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -62,8 +62,8 @@ DANGER = (251, 113, 133)
 # One colour per action so the legend, the meters, the typed symbols and
 # the pause countdown all speak the same visual language.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # short smile
-    "dash": (167, 139, 250),      # long smile
+    "dot": (103, 232, 249),       # short pull / one wiggle
+    "dash": (167, 139, 250),      # long pull / two wiggles
     "letter": (251, 191, 36),     # short pause -> end of letter
     "word": (74, 222, 128),       # long pause  -> space
 }
@@ -97,16 +97,18 @@ class CameraSettings:
 
 
 @dataclass
-class SmileSettings:
-    """Threshold and timing for reading smiles."""
+class EarSettings:
+    """Threshold, timing and typing mode for ear wiggles."""
 
-    # The smile score is 0 with a relaxed face and 1 for an average smile
-    # from calibration. Above `threshold` the smile counts as pressed.
+    # The ear score is 0 with relaxed ears and 1 for an average wiggle
+    # from calibration. Above `threshold` the ears count as pressed.
     threshold: float = 0.50
-    # The Morse time unit t, in seconds. Everything is derived from it:
-    # smile < 1.5 t = dot, >= 1.5 t = dash, relaxed 3 t = end of letter,
-    # relaxed 7 t = end of word.
+    # The Morse time unit t, in seconds. Everything is derived from it.
     time_unit: float = 0.25
+    # False: hold mode, a short pull is a dot and a long pull a dash.
+    # True: twitch mode, one wiggle is a dot and two quick wiggles a dash,
+    # for ears that can twitch but not stay pulled back.
+    twitch_mode: bool = False
 
     @property
     def dash_after(self) -> float:
@@ -124,7 +126,7 @@ class SmileSettings:
 @dataclass
 class AppSettings:
     camera: CameraSettings = field(default_factory=CameraSettings)
-    smile: SmileSettings = field(default_factory=SmileSettings)
+    ear: EarSettings = field(default_factory=EarSettings)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -140,7 +142,7 @@ class AppSettings:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             return settings
-        for name in ("camera", "smile"):
+        for name in ("camera", "ear"):
             section = getattr(settings, name)
             saved = data.get(name, {})
             for f in fields(section):

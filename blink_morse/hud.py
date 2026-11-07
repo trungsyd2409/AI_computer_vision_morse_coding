@@ -1,10 +1,10 @@
 """
 Everything drawn on top of the camera image.
 
-Apart from one small readout next to the mouth, nothing is drawn on the
+Apart from one small readout next to the ear, nothing is drawn on the
 face; all other feedback lives in the panels around it. The top-left panel
-shows a redrawn face mesh with the head angles for debugging (G switches it
-to the timing legend). The HUD paints
+shows a close-up of each ear with the measured edges and the head angles,
+for debugging (G switches it to the timing legend). The HUD paints
 into two pygame surfaces every frame:
 
 * `ui`   - transparent layer with text, meters and icons.
@@ -21,16 +21,14 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
-import numpy as np
 import pygame
 
 from . import draw
 from .config import (ACCENT, ACTION_COLORS, DANGER, FONTS_DIR, MIN_ACCEPTABLE_FPS,
                      SUCCESS, TEXT, TEXT_FAINT, TEXT_MUTED, WARNING)
-from .face_view import FaceMeshView
 from .morse import MORSE_TABLE, candidates, decode
 from .fusion import quality_label
-from .smile import FEATURES
+from .ear import FEATURES
 
 # Characters shown in the reference chart, laid out column by column.
 CHART_CHARS = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
@@ -43,12 +41,14 @@ PUNCTUATION_HINT = ". , ? ! ' / ( ) : = + - @"
 UI_CLEAR = (232, 236, 244, 0)
 
 FLASH_TIME = 0.35          # how long a legend row stays lit after an action
-CHIP_SIZE = (66, 28)       # smile readout next to the mouth
-CHIP_GAP = 14              # distance between the mouth corner and the readout
-SCORE_MAX = 1.5            # smile meters run from 0 to 150 % of a typical smile
+CHIP_SIZE = (66, 28)       # ear score readout next to the ear
+CHIP_GAP = 14              # distance between the ear edge and the readout
+SCORE_MAX = 1.5            # ear meters run from 0 to 150 % of a typical wiggle
+EAR_CELL = (104, 156)      # size of each ear crop in the top-left panel
 
 # Colours of the calibration prompts.
-PROMPT_COLORS = {"relax": ACTION_COLORS["word"], "smile": ACTION_COLORS["dash"]}
+PROMPT_COLORS = {"relax": ACTION_COLORS["word"], "turn": ACTION_COLORS["word"],
+                 "ear": ACTION_COLORS["dash"]}
 
 
 @dataclass
@@ -60,15 +60,17 @@ class HudState:
     face: bool = False                   # a face is being tracked
     signal: object = None                # SignalResult of the last frame
     calibration: object = None           # Calibration in use, or None
-    chip: Optional[tuple] = None         # screen position of the smile readout
-    threshold: float = 0.5               # smile score that counts as pressed
-    pressed: bool = False                # inside a smile
-    pressed_time: float = 0.0            # length of the current smile so far
+    chip: Optional[tuple] = None         # screen position of the ear readout
+    threshold: float = 0.5               # ear score that counts as pressed
+    pressed: bool = False                # ears pulled / inside a wiggle
+    pressed_time: float = 0.0            # length of the current pull so far
+    twitch_mode: bool = False            # 1 wiggle = dot, 2 wiggles = dash
+    waiting: bool = False                # twitch mode: one wiggle seen, waiting for a second
     paused: bool = False                 # input ignored until P is pressed
     pause_kind: Optional[str] = None     # "letter", "space" or None
     pause_progress: float = 0.0          # 0..1 towards `pause_kind`
     pause_left: float = 0.0              # seconds until it happens
-    dash_after: float = 0.375            # smile length that makes a dash
+    dash_after: float = 0.375            # pull length that makes a dash
     letter_gap: float = 0.75
     word_gap: float = 1.75
     code: str = ""
@@ -77,8 +79,8 @@ class HudState:
     show_chart: bool = True
     show_debug: bool = False             # feature weights instead of the chart
     logging: bool = False                # features are being written to CSV
-    show_legend: bool = False            # timing legend instead of the face mesh
-    face_points: Optional[np.ndarray] = None   # landmarks in camera pixels
+    show_legend: bool = False            # timing legend instead of the ear view
+    ear_views: dict = None               # screen side -> EarView (crop + edges)
     yaw: float = 0.0                     # head turn, + = towards screen right
     pitch: float = 0.0                   # head nod, + = looking down
     yaw_ref: float = 0.0                 # calibrated pose the gate compares with
@@ -149,7 +151,6 @@ class Hud:
         self.rect_legend = pygame.Rect(margin, 88, 248, 132)
         self.rect_face = pygame.Rect(margin, 88, 248, 232)
         self.rect_meters = pygame.Rect(margin, self.rect_face.bottom + 12, 248, 80)
-        self.face_view = FaceMeshView()
         self.rect_fps = pygame.Rect(w - margin - 100, margin, 100, 32)
         self.rect_chart = pygame.Rect(w - margin - 212, 60, 212, 362)
         self.rect_bottom = pygame.Rect(margin, h - margin - 150, w - 2 * margin, 150)
@@ -203,7 +204,7 @@ class Hud:
         self._bottom_flash = (now, color)
 
     def on_recentred(self, now: float) -> None:
-        self._pops.append(("face re-centred", WARNING, now, 32))
+        self._pops.append(("ears re-centred", WARNING, now, 32))
 
     # ------------------------------------------------------------------------
     # Frame
@@ -226,7 +227,7 @@ class Hud:
         if state.show_legend:
             self._draw_legend(state, now)
         else:
-            self._draw_face(state)
+            self._draw_ears(state)
         self._draw_meters(state)
         self._draw_fps(state)
         if state.show_debug:
@@ -259,8 +260,8 @@ class Hud:
             self.panels.append(Panel(self.rect_calib, 0.8, color))
         if state.camera_error:
             self.panels.append(Panel(self.rect_error, 0.6, DANGER))
-        # Glass readout next to the mouth; the border lights up during a
-        # smile, in the colour of the symbol it is about to type.
+        # Glass readout next to the ear; the border lights up during a
+        # pull, in the colour of the symbol it is about to type.
         rect = self._chip_rect(state)
         if rect is not None:
             self.panels.append(Panel(rect, 0.9 if state.pressed else 0.0,
@@ -269,7 +270,7 @@ class Hud:
     @staticmethod
     def _press_color(state: HudState) -> tuple:
         """
-        Colour of a smile in progress: what it will type if the face relaxes
+        Colour of a pull in progress: what it will type if the ears relax
         now (dot, then dash once it is long enough).
         """
         if state.pressed:
@@ -325,7 +326,7 @@ class Hud:
     # ------------------------------------------------------------------------
 
     def _draw_chip(self, state: HudState) -> None:
-        """Smile as a percentage of a typical smile, beside the mouth."""
+        """Ear score as a percentage of a typical wiggle, beside the ear."""
         rect = self._chip_rect(state)
         if rect is None:
             return
@@ -346,7 +347,7 @@ class Hud:
 
     def _draw_title(self, state: HudState) -> None:
         r = self.rect_title
-        self.blit(self.text("semibold", 17, "Smile Morse", TEXT), (r.x + 16, r.y + 10))
+        self.blit(self.text("semibold", 17, "Ear Morse", TEXT), (r.x + 16, r.y + 10))
         if state.logging:
             draw.circle(self.ui, DANGER, (r.right - 46, r.y + 21), 3.5)
             draw.glow(self.glow, DANGER, (r.right - 46, r.y + 21), 10, 0.6)
@@ -376,56 +377,75 @@ class Hud:
     def _legend_rows(self, state: HudState) -> list:
         def sec(v):
             return f"{round(v, 2):g} s"
+        if state.twitch_mode:
+            window = sec(state.dash_after / 1.5 * 2.0)
+            return [
+                ("dot", "1 wiggle", f"then still {window}  \u00b7"),
+                ("dash", "2 wiggles", f"within {window}  \u2013"),
+                ("letter", f"Still {sec(state.letter_gap)}", "end letter"),
+                ("word", f"Still {sec(state.word_gap)}", "space"),
+            ]
         return [
-            ("dot", "Short smile", f"< {sec(state.dash_after)}  \u00b7"),
-            ("dash", "Long smile", f"\u2265 {sec(state.dash_after)}  \u2013"),
+            ("dot", "Short pull", f"< {sec(state.dash_after)}  \u00b7"),
+            ("dash", "Long pull", f"\u2265 {sec(state.dash_after)}  \u2013"),
             ("letter", f"Relax {sec(state.letter_gap)}", "end letter"),
             ("word", f"Relax {sec(state.word_gap)}", "space"),
         ]
 
-    def _draw_face(self, state: HudState) -> None:
+    def _draw_ears(self, state: HudState) -> None:
         """
-        The tracked face redrawn as a mesh on the left, head angles on the
-        right. Debug view: shows how steady the landmarks really are.
+        Both ears as the tracker sees them: a head-aligned crop of each,
+        the face edge (thin white line) and the measured outer edge of the
+        ear (coloured line). Head angles below. Debug view.
         """
         r = self.rect_face
-        self.blit(self.label("Face mesh"), (r.x + 16, r.y + 12))
-        area = pygame.Rect(r.x + 8, r.y + 28, 136, r.h - 36)
-        pts = state.face_points if state.face else None
-        if pts is None:
-            self.blit(self.text("regular", 12, "No face", TEXT_FAINT), area.center, "center")
-        else:
-            color = self._press_color(state) if state.pressed else ACCENT
-            fill = 0.15 + 0.55 * min(1.0, state.level)
-            surf = self.face_view.render(pts, area.size, color, fill)
-            self.ui.blit(surf, area.topleft)
-            if state.pressed:
-                for cx, cy in self.face_view.highlight_centres:
-                    draw.glow(self.glow, color, (area.x + cx, area.y + cy), 12, 0.7)
-
-        x = r.x + 150
-        rows = (
-            ("Yaw", state.yaw, state.yaw_ref, state.max_yaw, ("left", "right")),
-            ("Pitch", state.pitch, state.pitch_ref, state.max_pitch, ("up", "down")),
-        )
-        for i, (name, value, ref, limit, words) in enumerate(rows):
-            y = r.y + 36 + i * 92
-            self.blit(self.label(name), (x, y))
-            self.blit(self.text("regular", 10, f"\u00b1{limit:.0f}\u00b0", TEXT_MUTED),
-                      (r.right - 12, y), "topright")
-            if pts is None:
-                self.blit(self.text("semibold", 20, "-", TEXT_FAINT), (x, y + 14))
+        self.blit(self.label("Ears"), (r.x + 16, r.y + 12))
+        views = (state.ear_views or {}) if state.face else {}
+        cw, ch = EAR_CELL
+        for i, side in enumerate(("left", "right")):
+            cell = pygame.Rect(r.x + 16 + i * (cw + 8), r.y + 30, cw, ch)
+            view = views.get(side)
+            if view is None or view.crop is None:
+                draw.rounded_rect(self.ui, (255, 255, 255, 18), cell, 6)
+                self.blit(self.text("regular", 11, "no face", TEXT_FAINT), cell.center, "center")
                 continue
-            calibrated = state.calibration is not None
+            src_h, src_w = view.crop.shape[:2]
+            surf = pygame.image.frombuffer(view.crop.tobytes(), (src_w, src_h), "RGB")
+            surf = pygame.transform.smoothscale(surf, cell.size)
+            if not view.visible:
+                surf.set_alpha(110)
+            self.ui.blit(surf, cell.topleft)
+            sx = cw / src_w
+            fx = cell.x + view.face_x * sx
+            draw.line(self.ui, (255, 255, 255, 120), (fx, cell.y), (fx, cell.bottom), 1)
+            if view.edge_x is not None:
+                ex = cell.x + view.edge_x * sx
+                color = self._press_color(state) if state.pressed else SUCCESS
+                draw.line(self.ui, color, (ex, cell.y + 2), (ex, cell.bottom - 2), 2)
+                if state.pressed:
+                    draw.glow(self.glow, color, (ex, cell.centery), 16, 0.6)
+            else:
+                tag = self.text("semibold", 11, "hidden", WARNING)
+                self.blit(tag, (cell.centerx, cell.bottom - 12), "center")
+            self.blit(self.text("semibold", 10, "L" if side == "left" else "R", TEXT),
+                      (cell.x + 6, cell.y + 4))
+
+        calibrated = state.calibration is not None
+        y = r.y + 30 + ch + 12
+        for i, (name, value, ref, limit) in enumerate((
+                ("yaw", state.yaw, state.yaw_ref, state.max_yaw),
+                ("pitch", state.pitch, state.pitch_ref, state.max_pitch))):
+            x = r.x + 16 + i * (cw + 8)
+            if not state.face:
+                self.blit(self.text("regular", 11, f"{name} -", TEXT_FAINT), (x, y))
+                continue
             delta = value - ref
             over = calibrated and abs(delta) > limit
-            color = WARNING if over else TEXT
-            self.blit(self.text("semibold", 20, f"{abs(value):.1f}\u00b0", color), (x, y + 14))
-            direction = words[1] if value > 0.5 else words[0] if value < -0.5 else "centre"
-            self.blit(self.text("regular", 12, direction, TEXT_MUTED), (x, y + 42))
-            note = f"\u0394 calib {delta:+.1f}\u00b0" if calibrated else "not calibrated"
-            self.blit(self.text("regular", 11, note, WARNING if over else TEXT_FAINT),
-                      (x, y + 60))
+            self.blit(self.text("medium", 12, f"{name} {value:+.1f}\u00b0",
+                                WARNING if over else TEXT), (x, y))
+            note = f"\u0394 {delta:+.1f}\u00b0 / \u00b1{limit:.0f}" if calibrated else "not calibrated"
+            self.blit(self.text("regular", 10, note, WARNING if over else TEXT_FAINT),
+                      (x, y + 16))
 
     def _draw_legend(self, state: HudState, now: float) -> None:
         r = self.rect_legend
@@ -450,9 +470,9 @@ class Hud:
                       (r.right - 14, cy), "midright")
 
     def _draw_meters(self, state: HudState) -> None:
-        """Smile bar with the threshold marked, and the calibration status."""
+        """Ear score bar with the threshold marked, and the calibration status."""
         r = self.rect_meters
-        self.blit(self.label("Smile"), (r.x + 16, r.y + 12))
+        self.blit(self.label("Ears"), (r.x + 16, r.y + 12))
         x0, x1 = r.x + 16, r.right - 62
         cy = r.y + 40
         value = state.level
@@ -467,7 +487,7 @@ class Hud:
             draw.glow(self.glow, color, (fill.right - 4, cy), 16, 0.7)
         tx = x0 + track.w * min(1.0, state.threshold / SCORE_MAX)
         draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
-        # A faint tick where an average calibration smile lands.
+        # A faint tick where an average calibration wiggle lands.
         ax = x0 + track.w / SCORE_MAX
         draw.line(self.ui, (255, 255, 255, 70), (ax, cy - 5), (ax, cy + 5), 1)
 
@@ -492,15 +512,22 @@ class Hud:
         self.blit(self.text("regular", 11, line, line_color), (r.x + 16, r.y + 62), "midleft")
 
     def _draw_calibration(self, state: HudState) -> None:
-        """Big prompt telling the user to relax or smile, with a progress bar."""
+        """Big prompt telling the user what to do, with a progress bar."""
         r = self.rect_calib
         n = state.signal
         step = n.step or "relax"
         color = PROMPT_COLORS.get(step, ACCENT)
-        title = "Smile, lips closed" if step == "smile" else "Relax your face"
+        if step == "ear":
+            title = "Wiggle your ears" if state.twitch_mode else "Pull your ears back, hold"
+        elif step == "turn":
+            title = "Turn your head a little"
+        else:
+            title = "Relax your ears"
         self.blit(self.text("semibold", 20, title, color), (r.centerx, r.y + 28), "center")
         draw.glow(self.glow, color, (r.centerx, r.y + 28), 40, 0.25)
-        sub = f"Calibration {n.step_index + 1} / {n.step_count}  \u00b7  keep your head still"
+        hint = ("ears relaxed, slowly left and right" if step == "turn"
+                else "keep your head still")
+        sub = f"Calibration {n.step_index + 1} / {n.step_count}  \u00b7  {hint}"
         self.blit(self.text("regular", 11, sub, TEXT_MUTED), (r.centerx, r.y + 52), "center")
         track = pygame.Rect(r.x + 20, r.y + 66, r.w - 40, 5)
         draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 2)
@@ -517,10 +544,11 @@ class Hud:
                   (r.right - 14, r.y + 12), "topright")
         cal = state.calibration
         sig = state.signal
+        spacing = min(40, (r.h - 110) // len(FEATURES))
         for i, name in enumerate(FEATURES):
-            cy = r.y + 50 + i * 40
+            cy = r.y + 50 + i * spacing
             w = cal.weights[i] if cal is not None else 0.0
-            # Share of an average calibration smile that this feature
+            # Share of an average calibration wiggle that this feature
             # provides (the shares add up to 100 %).
             share = w * cal.effect[i] * 100 if cal is not None else 0.0
             live = sig is not None and state.face and len(sig.z) == len(FEATURES)
@@ -545,7 +573,7 @@ class Hud:
             col = ACTION_COLORS["dot"] if length >= 0 else DANGER
             draw.rounded_rect(self.ui, draw.with_alpha(col, 0.85), seg, 2)
 
-        y = r.y + 50 + len(FEATURES) * 40
+        y = r.y + 50 + len(FEATURES) * spacing + 6
         raw = sig.raw if (sig is not None and state.face) else 0.0
         self.blit(self.text("regular", 12, f"sum {raw:+.2f}   smoothed {state.level:.2f}",
                             TEXT_MUTED), (x0, y), "midleft")
@@ -649,7 +677,7 @@ class Hud:
         if state.code or flaring:
             end = self._draw_code(state.code, x0 + shake, cy, now)
             if flaring:
-                self._draw_live_smile(state, end, cy)
+                self._draw_live_press(state, end, cy)
             if state.code:
                 self._draw_prediction(state, r.right - 20, cy)
         elif state.pause_kind == "space":
@@ -668,10 +696,15 @@ class Hud:
             self.blit(self.text("regular", 14,
                                 "Calibrating: follow the prompt at the top of the screen",
                                 TEXT_FAINT), (x0, cy), "midleft")
-        else:
+        elif state.waiting:
             self.blit(self.text("regular", 14,
-                                "Short smile for a dot, long smile for a dash",
-                                TEXT_FAINT), (x0 + shake, cy), "midleft")
+                                "One wiggle seen: wiggle again now for a dash",
+                                TEXT_MUTED), (x0 + shake, cy), "midleft")
+        else:
+            hint = ("One wiggle for a dot, two quick wiggles for a dash" if state.twitch_mode
+                    else "Short pull for a dot, long pull for a dash")
+            self.blit(self.text("regular", 14, hint, TEXT_FAINT),
+                      (x0 + shake, cy), "midleft")
 
         # Divider
         pygame.draw.line(self.ui, (255, 255, 255, 22),
@@ -726,7 +759,7 @@ class Hud:
                 draw.glow(self.glow, color, (cx, cy), 24, 0.55 * grow)
                 draw.capsule(self.ui, color, (cx, cy), 34 * grow, 13 * grow)
 
-            # A quick ripple on the newest symbol confirms the smile landed.
+            # A quick ripple on the newest symbol confirms the symbol landed.
             if is_last and t < 0.35:
                 k = t / 0.35
                 draw.ring(self.ui, draw.with_alpha(color, 1.0 - k), (cx, cy),
@@ -735,10 +768,10 @@ class Hud:
             x += width
         return x
 
-    def _draw_live_smile(self, state: HudState, x: float, cy: float) -> None:
+    def _draw_live_press(self, state: HudState, x: float, cy: float) -> None:
         """
-        While smiling, show the symbol the smile will produce: a dot
-        outline that stretches into a dash as the smile gets longer.
+        While the ears are pulled, show the symbol the pull will produce: a
+        dot outline that stretches into a dash as the pull gets longer.
         Once the dash has been typed it appears as a real symbol instead.
         """
         if state.pressed_time >= state.dash_after:
@@ -774,7 +807,7 @@ class Hud:
 
         left = right - 56
         if char is not None:
-            self.blit(self.text("regular", 12, "relax your face to confirm", TEXT_MUTED),
+            self.blit(self.text("regular", 12, "relax your ears to confirm", TEXT_MUTED),
                       (left, cy), "midright")
         elif options:
             preview = "  ".join(options[:6]) + ("  \u2026" if len(options) > 6 else "")

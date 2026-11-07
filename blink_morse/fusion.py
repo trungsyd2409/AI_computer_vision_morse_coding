@@ -1,7 +1,7 @@
 """
 Turns several weak face measurements into one "press" score with a short
 guided calibration. Nothing here knows which body part is measured: a
-subclass (see smile.py) lists its features and the word on the prompt.
+subclass (see ear.py) lists its features and the word on the prompt.
 
 Calibration
 -----------
@@ -12,9 +12,11 @@ are thrown away to allow for reaction time. From the remaining frames:
 1. Every feature is standardised with its resting mean and noise:
    z = (x - mean_rest) / std_rest.
 2. d = mean z during the action, i.e. how many noise units each feature moves.
-3. The noise covariance C of z at rest is shrunk towards the identity
-   (features from the same face mesh are correlated) and the weights are
-   the Fisher linear discriminant: w = C^-1 d.
+3. The noise covariance C of z at rest has its correlations shrunk
+   (features from the same face are correlated, and a short calibration
+   overestimates that) and the weights are the Fisher linear
+   discriminant: w = C^-1 d. Nuisance features (head angles) are first
+   regressed out of the others, see fit_calibration.
 4. The weights are scaled so that the average action scores 1.0 and rest
    scores 0.0. The separation d' = sqrt(d . C^-1 d) is shown as the
    calibration quality.
@@ -62,7 +64,8 @@ class Calibration:
 def fit_calibration(rest: np.ndarray, active: Optional[np.ndarray],
                     min_std: np.ndarray, fallback_weights: np.ndarray,
                     enabled: Optional[np.ndarray] = None,
-                    shrink: float = 0.3, min_quality: float = 0.8) -> Calibration:
+                    shrink: float = 0.3, min_quality: float = 0.8,
+                    nuisance: Optional[np.ndarray] = None) -> Calibration:
     """
     rest, active:     arrays of shape (frames, n_features), NaN allowed
     min_std:          smallest resting noise per feature. Without a floor, a
@@ -70,6 +73,12 @@ def fit_calibration(rest: np.ndarray, active: Optional[np.ndarray],
                       would get a huge weight from a tiny change later.
     fallback_weights: relative weights used when calibration fails
     enabled:          boolean mask; disabled features get weight 0
+    nuisance:         boolean mask of features that must never count as
+                      the action themselves (head angles, for example).
+                      At rest, every other feature is regressed on them
+                      (ridge, in z units) and only what they cannot
+                      explain goes into the discriminant. Their weights
+                      then subtract the explained part at run time.
     """
     rest = np.atleast_2d(np.asarray(rest, dtype=np.float64))
     n = rest.shape[1]
@@ -92,17 +101,41 @@ def fit_calibration(rest: np.ndarray, active: Optional[np.ndarray],
         return np.where(np.isfinite(z), z, 0.0)
 
     fb = np.asarray(fallback_weights, dtype=np.float64) * enabled
-    # Mean z of the fallback features, with a typical action at 3 sigma.
-    fb = fb / (max(1.0, float(fb.sum())) * 3.0)
+    # Mean z of the fallback features (a negative weight means the feature
+    # drops during the action), with a typical action at 3 sigma.
+    fb = fb / (max(1.0, float(np.abs(fb).sum())) * 3.0)
     fallback = Calibration(mean, std, fb, 0.0, np.zeros(n), fallback=True)
     if active is None or len(active) < 5 or len(rest) < 10 or not enabled.any():
         return fallback
 
     zr, za = standardise(rest), standardise(np.asarray(active, dtype=np.float64))
-    d = za.mean(axis=0) * enabled
-    idx = np.flatnonzero(enabled)
-    cov = np.atleast_2d(np.cov(zr[:, idx], rowvar=False))
-    cov = (1.0 - shrink) * cov + shrink * np.eye(len(idx))
+    nuis = np.zeros(n, dtype=bool) if nuisance is None else np.asarray(nuisance, dtype=bool)
+    idx = np.flatnonzero(enabled & ~nuis)            # features that may signal
+    nidx = np.flatnonzero(enabled & nuis)            # features that only cancel
+    if len(idx) == 0:
+        return fallback
+
+    # Remove from each signal feature the part that follows the nuisance
+    # features at rest: B maps nuisance z -> expected signal z.
+    B = np.zeros((len(nidx), len(idx)))
+    if len(nidx):
+        zn = zr[:, nidx]
+        ridge = 0.05 * len(zr) * np.eye(len(nidx))
+        try:
+            B = np.linalg.solve(zn.T @ zn + ridge, zn.T @ zr[:, idx])
+        except np.linalg.LinAlgError:
+            B = np.zeros((len(nidx), len(idx)))
+    res_r = zr[:, idx] - zr[:, nidx] @ B
+    res_a = za[:, idx] - za[:, nidx] @ B
+
+    d = np.zeros(n)
+    d[idx] = res_a.mean(axis=0)
+    cov = np.atleast_2d(np.cov(res_r, rowvar=False))
+    # Shrink the correlations, keep each feature's own variance. After the
+    # head angles are regressed out, a feature's variance can be far below
+    # 1, and shrinking towards the identity would add noise it never had.
+    var = np.maximum(np.diag(cov), 1e-6)
+    cov = (1.0 - shrink) * cov + shrink * np.diag(var)
     try:
         w_sub = np.linalg.solve(cov, d[idx])
     except np.linalg.LinAlgError:
@@ -117,6 +150,8 @@ def fit_calibration(rest: np.ndarray, active: Optional[np.ndarray],
 
     weights = np.zeros(n)
     weights[idx] = w_sub / separation               # average action -> 1.0
+    # score = w . (z_signal - z_nuisance B), so the nuisance weights are -B w.
+    weights[nidx] = -B @ weights[idx]
     return Calibration(mean, std, weights, quality, d)
 
 
@@ -158,6 +193,9 @@ class FusedSignal:
     MIN_STD: tuple = ()                # noise floor per feature
     FALLBACK: dict = {}                # feature name -> relative fallback weight
     ACTION = "active"                  # name of the action step in calibration
+    REST_STEPS = ("relax",)            # calibration steps that count as rest
+    NUISANCE: tuple = ()               # feature names used only to cancel noise
+    SHRINK = 0.3                       # covariance shrinkage towards identity
 
     FIRST_REST = 2.0       # seconds of the first relax step
     ACTION_TIME = 1.5
@@ -206,8 +244,10 @@ class FusedSignal:
 
     def _fit(self, rest, active) -> Calibration:
         fallback = np.array([self.FALLBACK.get(name, 0.0) for name in self.FEATURES])
+        nuisance = np.array([name in self.NUISANCE for name in self.FEATURES])
         return fit_calibration(rest, active, np.asarray(self.MIN_STD, dtype=np.float64),
-                               fallback, self.enabled)
+                               fallback, self.enabled, shrink=self.SHRINK,
+                               nuisance=nuisance)
 
     def start_calibration(self) -> None:
         """Begin the guided relax / action sequence (C key, or at start)."""
@@ -290,7 +330,7 @@ class FusedSignal:
         kind, length = steps[self._step]
         self._step_time += dt
         if self._step_time >= self.SKIP:
-            if kind == "relax":
+            if kind in self.REST_STEPS:
                 self._rest.append(features)
                 self._poses.append((pitch, yaw))
             else:

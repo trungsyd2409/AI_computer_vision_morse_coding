@@ -1,5 +1,5 @@
 """
-Settings window with two tabs: Camera and Smile.
+Settings window with two tabs: Camera and Ears.
 
 It runs in a separate process with its own pygame window. The main window
 uses an OpenGL context, and a second window in the same process would
@@ -26,7 +26,7 @@ from .config import (ACCENT, ACTION_COLORS, DANGER, FPS_CHOICES, MIN_ACCEPTABLE_
 
 ROW_H = 32
 PAD = 24
-TABS = [("Camera", "camera"), ("Smile", "smile")]
+TABS = [("Camera", "camera"), ("Ears", "ear")]
 
 
 def list_camera_names() -> list:
@@ -139,7 +139,7 @@ class SettingsWindow:
         self.conn = conn
         self.fonts = Fonts()
         self.values = {"camera": dict(initial["camera"]),
-                       "smile": dict(initial["smile"])}
+                       "ear": dict(initial["ear"])}
         self.stats = {}
         self.camera_names = list_camera_names()
         self.tab = "camera"
@@ -156,7 +156,7 @@ class SettingsWindow:
 
     def _build_widgets(self) -> None:
         cam = self.values["camera"]
-        smile = self.values["smile"]
+        ear = self.values["ear"]
         w = SETTINGS_SIZE[0] - 2 * PAD
         self.tab_bar = TabBar(TABS, self.tab)
         self.tab_bar.rect = self.pg.Rect(PAD, 150, w, 34)
@@ -186,11 +186,13 @@ class SettingsWindow:
                 Slider("Contrast", "camera", "contrast", cam["contrast"], 0, 255, 1, "{:.0f}"),
                 Slider("Gain", "camera", "gain", cam["gain"], 0, 255, 1, "{:.0f}"),
             ]),
-            "smile": page([
-                Slider("Smile threshold", "smile", "threshold",
-                       smile["threshold"], 0.05, 0.95, 0.01, "{:.0%}"),
-                Slider("Time unit t", "smile", "time_unit",
-                       smile["time_unit"], 0.05, 0.60, 0.01, "{:.2f} s"),
+            "ear": page([
+                Slider("Ear threshold", "ear", "threshold",
+                       ear["threshold"], 0.05, 0.95, 0.01, "{:.0%}"),
+                Slider("Time unit t", "ear", "time_unit",
+                       ear["time_unit"], 0.05, 0.60, 0.01, "{:.2f} s"),
+                Toggle("Twitch mode (1 wiggle = dot, 2 = dash)", "ear", "twitch_mode",
+                       ear["twitch_mode"]),
                 Button("Calibrate again (C)", "calibrate", None),
             ]),
         }
@@ -278,11 +280,11 @@ class SettingsWindow:
         self.conn.send(change)
 
     def _reset(self) -> None:
-        from .config import CameraSettings, SmileSettings
+        from .config import CameraSettings, EarSettings
         from dataclasses import asdict
-        cam, smile = asdict(CameraSettings()), asdict(SmileSettings())
+        cam, ear = asdict(CameraSettings()), asdict(EarSettings())
         cam["index"] = self.values["camera"]["index"]
-        self.values = {"camera": cam, "smile": smile}
+        self.values = {"camera": cam, "ear": ear}
         self._build_widgets()
 
     def _read_pipe(self) -> bool:
@@ -346,7 +348,7 @@ class SettingsWindow:
             enabled = self._enabled(widget)
             widget.draw(s, self, hover=(widget is self.hover), enabled=enabled)
 
-        if self.tab == "smile":
+        if self.tab == "ear":
             self._draw_timing_card()
 
     def _draw_timing_card(self) -> None:
@@ -354,8 +356,9 @@ class SettingsWindow:
         pg = self.pg
         from . import draw
         s = self.screen
-        t = self.values["smile"]["time_unit"]
-        last = self.pages["smile"][-1].rect
+        t = self.values["ear"]["time_unit"]
+        twitch = self.values["ear"]["twitch_mode"]
+        last = self.pages["ear"][-1].rect
         card = pg.Rect(PAD, last.bottom + 18, SETTINGS_SIZE[0] - 2 * PAD, 138)
         layer = pg.Surface(card.size, pg.SRCALPHA)
         draw.rounded_rect(layer, (255, 255, 255, 12), layer.get_rect(), 12)
@@ -363,12 +366,20 @@ class SettingsWindow:
         s.blit(layer, card)
         s.blit(self._label("Timing"), (card.x + 16, card.y + 14))
 
-        rows = [
-            (ACTION_COLORS["dot"], "Dot", f"smile shorter than {1.5 * t:.2f} s"),
-            (ACTION_COLORS["dash"], "Dash", f"smile {1.5 * t:.2f} s or longer"),
-            (ACTION_COLORS["letter"], "End letter", f"face relaxed {3 * t:.2f} s"),
-            (ACTION_COLORS["word"], "Space", f"face relaxed {7 * t:.2f} s"),
-        ]
+        if twitch:
+            rows = [
+                (ACTION_COLORS["dot"], "Dot", f"1 wiggle, then {2 * t:.2f} s still"),
+                (ACTION_COLORS["dash"], "Dash", f"2 wiggles within {2 * t:.2f} s"),
+                (ACTION_COLORS["letter"], "End letter", f"ears still {3 * t:.2f} s more"),
+                (ACTION_COLORS["word"], "Space", f"ears still {7 * t:.2f} s more"),
+            ]
+        else:
+            rows = [
+                (ACTION_COLORS["dot"], "Dot", f"pull shorter than {1.5 * t:.2f} s"),
+                (ACTION_COLORS["dash"], "Dash", f"pull {1.5 * t:.2f} s or longer"),
+                (ACTION_COLORS["letter"], "End letter", f"ears relaxed {3 * t:.2f} s"),
+                (ACTION_COLORS["word"], "Space", f"ears relaxed {7 * t:.2f} s"),
+            ]
         for i, (color, name, rule) in enumerate(rows):
             cy = card.y + 46 + i * 24
             draw.circle(s, color, (card.x + 22, cy), 4)
