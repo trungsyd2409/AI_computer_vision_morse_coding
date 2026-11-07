@@ -5,7 +5,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [
     ("assets/fonts", "assets/fonts"),
-    ("models/face_landmarker.task", "models"),
+    ("models/hand_landmarker.task", "models"),
 ]
 binaries = []
 hiddenimports = ["pygrabber", "pygrabber.dshow_graph", "comtypes"]

@@ -1,10 +1,14 @@
 """
-Smile Morse - type Morse code by smiling in front of a webcam.
+Hand Morse - type Morse code with your index and middle fingers.
+
+Hold the two fingers straight and together to start recording, then bend
+them into a loop: a short loop is a dot, a long loop a dash.
 
 Run:  python main.py
-Keys: C calibrate, X settings, Z hide UI, P pause listening, H toggle chart,
-      F feature weights, G face mesh / timing legend, L record features to
-      CSV (hold N to label a smile), M mute, Backspace / Delete edit, Esc quit.
+Keys: X settings, Z hide UI, P pause listening, H toggle chart,
+      F gesture checks, G hand skeleton / timing legend, L record hand
+      measurements to CSV (hold N to label a loop), M mute,
+      Backspace / Delete edit, Esc quit.
 """
 
 import multiprocessing

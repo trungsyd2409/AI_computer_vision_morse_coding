@@ -1,14 +1,14 @@
 """
-Application loop: camera -> face tracking -> smile -> Morse -> screen.
+Application loop: camera -> hand tracking -> finger gesture -> Morse -> screen.
 
 Per frame:
   1. Take the newest camera frame (the camera runs in its own thread).
-  2. Mirror it and run MediaPipe to get landmarks, blendshapes and head pose.
-  3. Measure several smile features and fuse them into one smile score
-     (smile.py, fusion.py). A short guided calibration at start-up (and
-     on C) learns how much each feature counts for this face.
-  4. Feed the score to the press detector, which times each smile:
-     short = dot, long = dash.
+  2. Mirror it and run MediaPipe's hand landmarker.
+  3. Read the index + middle finger gesture (hand.py). Holding the two
+     fingers straight and together switches recording on; bending them
+     into a loop is the Morse key.
+  4. While recording, feed the loop score to the press detector, which
+     times each loop: short = dot, long = dash.
   5. Let the Morse composer turn pauses into letters and spaces.
   6. Draw the HUD and let the GPU compose the final image.
 
@@ -16,7 +16,7 @@ Pressing Z hides the whole interface, shows the untouched camera image and
 switches input off until Z is pressed again.
 
 Latency matters more than anything else here, so the symbol is typed and
-its sound played in the same frame the smile is recognised, before any
+its sound played in the same frame the loop is recognised, before any
 drawing happens.
 """
 
@@ -31,12 +31,11 @@ from .audio import SoundBank
 from .camera import CameraStream
 from .compositor import Compositor, cover_crop
 from .config import (APP_TITLE, LOGS_DIR, WINDOW_SIZE, AppSettings, CameraSettings,
-                     SmileSettings)
-from .face_tracker import FaceTracker
+                     HandSettings)
+from .hand import GestureDetector, GestureLog
+from .hand_tracker import HandTracker
 from .hud import CHIP_GAP, CHIP_SIZE, Hud, HudState
 from .morse import EventKind, MorseComposer
-from .fusion import FeatureLog, quality_label
-from .smile import FEATURES, MOUTH_CORNERS, SmileSignal, extract_features
 from .press import PressDetector, PressKind
 from .settings_window import SettingsLink
 
@@ -47,7 +46,7 @@ class BlinkMorseApp:
 
         # The model is loaded before the window opens so a first-run
         # download does not leave a frozen black window on screen.
-        self.tracker = FaceTracker()
+        self.tracker = HandTracker()
 
         pygame.init()
         pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
@@ -58,7 +57,7 @@ class BlinkMorseApp:
         pygame.display.gl_set_attribute(pygame.GL_CONTEXT_FLAGS,
                                         pygame.GL_CONTEXT_FORWARD_COMPATIBLE_FLAG)
         # VSync off: the camera already paces the loop, and vsync would add
-        # up to one extra frame of latency between a smile and its feedback.
+        # up to one extra frame of latency between a loop and its feedback.
         pygame.display.gl_set_attribute(pygame.GL_SWAP_CONTROL, 0)
         pygame.display.set_mode(WINDOW_SIZE, pygame.OPENGL | pygame.DOUBLEBUF)
         pygame.display.set_caption(APP_TITLE)
@@ -71,18 +70,19 @@ class BlinkMorseApp:
         self.camera = CameraStream(self.settings.camera)
         self.camera.start()
 
-        n = self.settings.smile
-        self.signal = SmileSignal(n.threshold)
-        self.detector = PressDetector(n.threshold, n.time_unit)
+        n = self.settings.hand
+        self.gesture = GestureDetector(n.loop_angle, n.need_folded)
+        # The gesture score is 0.5 exactly at the loop angle.
+        self.detector = PressDetector(0.5, n.time_unit)
         self.composer = MorseComposer(n.letter_gap, n.word_gap)
         self.settings_link = SettingsLink()
 
         self.paused = False               # P stops typing, e.g. to rest
         self.ui_visible = True            # Z hides the UI and stops input
         self.show_chart = True
-        self.show_debug = False           # F shows the feature weights
-        self.show_legend = False          # G swaps the face mesh for the legend
-        self.log: FeatureLog = None       # L writes features to a CSV file
+        self.show_debug = False           # F shows the gesture checks
+        self.show_legend = False          # G swaps the hand skeleton for the legend
+        self.log: GestureLog = None       # L writes measurements to a CSV file
         self._filter = 1.0                # current strength of the styled look
         self.fps = 0.0
         self._frame_id = 0
@@ -91,6 +91,7 @@ class BlinkMorseApp:
         self._props_sent = False
         self._state = HudState()
         self._chip_pos = None
+        self._last_wrist = None
 
     # ------------------------------------------------------------------------
 
@@ -153,8 +154,6 @@ class BlinkMorseApp:
             elif event.key == pygame.K_p:
                 self.paused = not self.paused
                 self.sounds.play("pause" if self.paused else "resume")
-            elif event.key == pygame.K_c:
-                self._recalibrate()
             elif event.key == pygame.K_f:
                 self.show_debug = not self.show_debug
             elif event.key == pygame.K_g:
@@ -171,18 +170,14 @@ class BlinkMorseApp:
                 self._apply_composer(self.composer.clear(), time.perf_counter())
         return True
 
-    def _recalibrate(self) -> None:
-        self.signal.start_calibration()
-        self.detector.reset(time.perf_counter())
-
     def _toggle_log(self) -> None:
         if self.log is not None:
             self._stop_log()
             self.sounds.play("pause")
             return
         try:
-            self.log = FeatureLog(LOGS_DIR, "smile", FEATURES)
-            print(f"Logging smile features to {self.log.path}")
+            self.log = GestureLog(LOGS_DIR)
+            print(f"Logging hand measurements to {self.log.path}")
             self.sounds.play("resume")
         except OSError as exc:
             print(f"Cannot write the log: {exc}")
@@ -197,10 +192,12 @@ class BlinkMorseApp:
     def _toggle_ui(self) -> None:
         self.ui_visible = not self.ui_visible
         state = self._state
-        state.face = False
+        state.hand = False
         state.pressed = False
+        state.armed = False
+        state.hand_screen = None
         self._chip_pos = None
-        self.signal.lost()
+        self.gesture.reset()
         # Start timing afresh, so time spent with the UI hidden is not
         # counted as a pause that ends the letter.
         self.detector.reset(time.perf_counter())
@@ -212,92 +209,91 @@ class BlinkMorseApp:
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
         if not self.ui_visible:
-            # UI hidden: plain camera only, no face tracking, no typing.
+            # UI hidden: plain camera only, no hand tracking, no typing.
             self.compositor.update_camera(frame_rgb)
             return
 
-        # Detection first, so a smile is typed before any time is spent on
+        # Detection first, so a loop is typed before any time is spent on
         # uploading textures or drawing.
         timestamp_ms = int((now - self._start) * 1000)
-        face = self.tracker.detect(frame_rgb, timestamp_ms, cam.mirror)
+        hand = self._pick_hand(self.tracker.detect(frame_rgb, timestamp_ms))
+
+        result = self.gesture.update(hand.world if hand is not None else None, now)
+        for name in result.events:
+            self.sounds.play("resume" if name == "armed" else "pause")
+            self.hud.on_armed(name == "armed", now)
+
+        if result.armed and not result.holding:
+            for event in self.detector.update(result.score, now):
+                if not self.paused:
+                    self._handle_press(event, now)
+        elif not result.armed:
+            # Recording is off: a loop in progress is dropped, not typed.
+            # The pause clock keeps running, so a pending letter still ends.
+            self.detector.reset()
+
+        if self.log is not None:
+            label = pygame.key.get_pressed()[pygame.K_n]
+            self.log.write(now, label, result, self.detector.pressed)
 
         state = self._state
-        if face is None or face.points is None:
-            self.signal.lost()
-            self.detector.reset()
-            state.face = False
-            state.pressed = False
-            self._chip_pos = None
+        state.hand = hand is not None
+        state.gesture = result
+        state.armed = result.armed
+        state.pressed = self.detector.pressed
+        state.hand_points = hand.points if hand is not None else None
+        if hand is not None:
+            screen = self._to_screen(hand.points, frame_rgb.shape)
+            state.hand_screen = screen
+            self._update_chip_position(screen)
         else:
-            features = extract_features(face.points, face.blend)
-            result = self.signal.update(features, now, face.pitch, face.yaw)
-            self._handle_signal_events(result.events, now)
+            state.hand_screen = None
+            self._chip_pos = None
 
-            if result.calibrating:
-                # No typing while the user follows the prompts, and the
-                # pause clock restarts so no letter ends meanwhile.
-                self.detector.reset(now)
-            else:
-                for event in self.detector.update(result.score, now):
-                    if not self.paused:
-                        self._handle_press(event, now)
-            if result.recentred:
-                self.hud.on_recentred(now)
-
-            if self.log is not None:
-                label = pygame.key.get_pressed()[pygame.K_n]
-                self.log.write(now, label, result, self.detector.pressed, features,
-                               face.pitch, face.yaw)
-
-            state.face = True
-            state.signal = result
-            state.pressed = self.detector.pressed
-            state.face_points = face.points
-            state.yaw, state.pitch = face.yaw, face.pitch
-            self._update_chip_position(face.points, frame_rgb.shape)
-
-        # Pauses end letters and words. Without a face nobody can be
-        # smiling at the camera, so the time since the last smile keeps counting.
+        # Pauses end letters and words, counted from the last release.
         for event in self.composer.update(self.detector.pause_time(now)):
             self._apply_composer(event, now)
         self.compositor.update_camera(frame_rgb)
 
-    def _handle_signal_events(self, events: list, now: float) -> None:
-        for name in events:
-            if name == "smile":
-                self.sounds.play("resume")
-            elif name == "relax":
-                self.sounds.play("pause")
-            elif name == "done":
-                self.sounds.play("letter")
-                cal = self.signal.calibration
-                self.hud.on_calibrated(quality_label(cal), now)
-                if cal is not None:
-                    shares = ", ".join(f"{n} {w * d * 100:.0f}%" for n, w, d
-                                       in zip(FEATURES, cal.weights, cal.effect))
-                    print(f"Calibration: {quality_label(cal)}, d' = {cal.quality:.2f}, "
-                          f"share of the smile score: {shares}")
+    def _pick_hand(self, hands: list):
+        """
+        With two hands in view, take the one making the gesture. If both
+        or neither do, take the one closest to the hand used last frame.
+        """
+        if not hands:
+            self._last_wrist = None
+            return None
+        good = [h for h in hands if self.gesture.pose_ok(h.world)] or hands
+        last = self._last_wrist
+        if last is not None and len(good) > 1:
+            good.sort(key=lambda h: float(np.linalg.norm(h.points[0] - last)))
+        self._last_wrist = good[0].points[0].copy()
+        return good[0]
 
     def _handle_press(self, event, now: float) -> None:
         symbol = "." if event.kind == PressKind.DOT else "-"
         self._apply_composer(self.composer.add_symbol(symbol), now)
 
-    def _update_chip_position(self, points: np.ndarray, shape) -> None:
-        """
-        Place the smile readout just outside the mouth corner on the
-        screen's right, in window pixels. Lightly smoothed so it does not
-        jitter.
-        """
+    @staticmethod
+    def _to_screen(points: np.ndarray, shape) -> np.ndarray:
+        """Camera pixels -> window pixels, with the same crop the compositor uses."""
         h, w = shape[:2]
         (sx, sy), (ox, oy) = cover_crop((w, h), WINDOW_SIZE)
         W, H = WINDOW_SIZE
+        out = np.empty_like(points, dtype=np.float64)
+        out[:, 0] = (points[:, 0] / w - ox) / sx * W
+        out[:, 1] = (points[:, 1] / h - oy) / sy * H
+        return out
 
-        def to_screen(p):
-            return np.array([(p[0] / w - ox) / sx * W, (p[1] / h - oy) / sy * H])
-
-        a, b = (to_screen(points[i]) for i in MOUTH_CORNERS)
+    def _update_chip_position(self, screen: np.ndarray) -> None:
+        """
+        Place the curl readout to the screen-right of the two fingertips, in
+        window pixels. Lightly smoothed so it does not jitter.
+        """
+        a, b = screen[8], screen[12]
         right = a if a[0] > b[0] else b
-        target = right + np.array([CHIP_GAP + CHIP_SIZE[0] / 2, 0.0])
+        target = np.array([right[0], (a[1] + b[1]) / 2]) + \
+            np.array([CHIP_GAP + CHIP_SIZE[0] / 2, 0.0])
         if self._chip_pos is not None:
             target = self._chip_pos * 0.5 + target * 0.5
         self._chip_pos = target
@@ -335,14 +331,12 @@ class BlinkMorseApp:
                 if section == "camera":
                     self._apply_camera_setting(key, value)
                 else:
-                    self._apply_smile_setting(key, value)
+                    self._apply_hand_setting(key, value)
             elif msg[0] == "action":
                 if msg[1] == "driver_dialog":
                     self.camera.open_driver_dialog()
                 elif msg[1] == "reset":
                     self._reset_settings()
-                elif msg[1] == "calibrate":
-                    self._recalibrate()
 
     def _apply_camera_setting(self, key: str, value) -> None:
         cam = self.settings.camera
@@ -360,12 +354,12 @@ class BlinkMorseApp:
             setattr(cam, key, value)
             self.camera.set_property(key, value)
 
-    def _apply_smile_setting(self, key: str, value) -> None:
-        n = self.settings.smile
+    def _apply_hand_setting(self, key: str, value) -> None:
+        n = self.settings.hand
         setattr(n, key, value)
-        self.detector.threshold = n.threshold
+        self.gesture.loop_angle = n.loop_angle
+        self.gesture.need_folded = n.need_folded
         self.detector.time_unit = n.time_unit
-        self.signal.threshold = n.threshold
         self.composer.letter_gap = n.letter_gap
         self.composer.word_gap = n.word_gap
 
@@ -374,8 +368,8 @@ class BlinkMorseApp:
         fresh_cam = CameraSettings(index=index)
         for field_name, value in vars(fresh_cam).items():
             setattr(self.settings.camera, field_name, value)
-        for field_name, value in vars(SmileSettings()).items():
-            self._apply_smile_setting(field_name, value)
+        for field_name, value in vars(HandSettings()).items():
+            self._apply_hand_setting(field_name, value)
         self.camera.restore_driver_defaults()
         self.camera.reopen()
         # Send the driver values again so the rebuilt sliders match them.
@@ -403,10 +397,11 @@ class BlinkMorseApp:
 
     def _render(self, now: float) -> None:
         state = self._state
-        n = self.settings.smile
+        n = self.settings.hand
         state.fps = self.fps
         state.camera_error = self.camera.error
-        state.threshold = n.threshold
+        state.loop_angle = n.loop_angle
+        state.need_folded = n.need_folded
         state.dash_after = n.dash_after
         state.letter_gap = n.letter_gap
         state.word_gap = n.word_gap
@@ -414,7 +409,6 @@ class BlinkMorseApp:
         state.code = self.composer.code
         state.text = self.composer.text
         state.paused = self.paused
-        state.calibration = self.signal.calibration
         state.chip = None if self._chip_pos is None else (float(self._chip_pos[0]),
                                                          float(self._chip_pos[1]))
 
@@ -428,8 +422,6 @@ class BlinkMorseApp:
         state.show_chart = self.show_chart
         state.show_debug = self.show_debug
         state.show_legend = self.show_legend
-        state.yaw_ref, state.pitch_ref = self.signal.yaw_ref, self.signal.pitch_ref
-        state.max_yaw, state.max_pitch = self.signal.MAX_YAW, self.signal.MAX_PITCH
         state.logging = self.log is not None
 
         # Fade the colour filter in or out over about a fifth of a second.

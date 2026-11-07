@@ -1,11 +1,11 @@
 """
 Everything drawn on top of the camera image.
 
-Apart from one small readout next to the mouth, nothing is drawn on the
-face; all other feedback lives in the panels around it. The top-left panel
-shows a redrawn face mesh with the head angles for debugging (G switches it
-to the timing legend). The HUD paints
-into two pygame surfaces every frame:
+On the camera image, only a glowing point where the index and middle
+fingertips touch and a small readout next to them are drawn; all other
+feedback lives in the panels around it. The top-left panel redraws the hand skeleton with the
+measured curl and tip gap for debugging (G switches it to the timing
+legend). The HUD paints into two pygame surfaces every frame:
 
 * `ui`   - transparent layer with text, meters and icons.
 * `glow` - opaque black layer where bright shapes are added. The GPU
@@ -27,10 +27,9 @@ import pygame
 from . import draw
 from .config import (ACCENT, ACTION_COLORS, DANGER, FONTS_DIR, MIN_ACCEPTABLE_FPS,
                      SUCCESS, TEXT, TEXT_FAINT, TEXT_MUTED, WARNING)
-from .face_view import FaceMeshView
+from .hand import GestureDetector
+from .hand_tracker import HAND_BONES
 from .morse import MORSE_TABLE, candidates, decode
-from .fusion import quality_label
-from .smile import FEATURES
 
 # Characters shown in the reference chart, laid out column by column.
 CHART_CHARS = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
@@ -43,12 +42,16 @@ PUNCTUATION_HINT = ". , ? ! ' / ( ) : = + - @"
 UI_CLEAR = (232, 236, 244, 0)
 
 FLASH_TIME = 0.35          # how long a legend row stays lit after an action
-CHIP_SIZE = (66, 28)       # smile readout next to the mouth
-CHIP_GAP = 14              # distance between the mouth corner and the readout
-SCORE_MAX = 1.5            # smile meters run from 0 to 150 % of a typical smile
+CHIP_SIZE = (66, 28)       # curl readout next to the fingertips
+CHIP_GAP = 14              # distance between the fingertips and the readout
+SCORE_MAX = 1.5            # the curl meter runs from score 0 to 1.5
 
-# Colours of the calibration prompts.
-PROMPT_COLORS = {"relax": ACTION_COLORS["word"], "smile": ACTION_COLORS["dash"]}
+# Bones of the two typing fingers, drawn bold in the hand skeleton.
+ACTIVE_BONES = {(5, 6), (6, 7), (7, 8), (9, 10), (10, 11), (11, 12)}
+BONE_COLOR = (236, 240, 248, 140)
+# Colour of the touch point while recording is off.
+TOUCH_IDLE = (236, 240, 248)
+STATE_TEXT = {"none": "NO HAND", "off": "OFF", "ready": "READY", "loop": "LOOP"}
 
 
 @dataclass
@@ -57,42 +60,41 @@ class HudState:
 
     fps: float = 0.0
     camera_error: Optional[str] = None
-    face: bool = False                   # a face is being tracked
-    signal: object = None                # SignalResult of the last frame
-    calibration: object = None           # Calibration in use, or None
-    chip: Optional[tuple] = None         # screen position of the smile readout
-    threshold: float = 0.5               # smile score that counts as pressed
-    pressed: bool = False                # inside a smile
-    pressed_time: float = 0.0            # length of the current smile so far
+    hand: bool = False                   # a hand is being tracked
+    gesture: object = None               # GestureResult of the last frame
+    hand_points: Optional[np.ndarray] = None   # (21, 2) landmarks in camera pixels
+    hand_screen: Optional[np.ndarray] = None   # the same landmarks in window pixels
+    chip: Optional[tuple] = None         # screen position of the curl readout
+    loop_angle: float = 85.0             # curl that counts as a loop
+    need_folded: bool = True             # ring and pinky must be folded
+    armed: bool = False                  # recording is on
+    pressed: bool = False                # inside a loop
+    pressed_time: float = 0.0            # length of the current loop so far
     paused: bool = False                 # input ignored until P is pressed
     pause_kind: Optional[str] = None     # "letter", "space" or None
     pause_progress: float = 0.0          # 0..1 towards `pause_kind`
     pause_left: float = 0.0              # seconds until it happens
-    dash_after: float = 0.375            # smile length that makes a dash
+    dash_after: float = 0.375            # loop length that makes a dash
     letter_gap: float = 0.75
     word_gap: float = 1.75
     code: str = ""
     text: str = ""
     muted: bool = False
     show_chart: bool = True
-    show_debug: bool = False             # feature weights instead of the chart
-    logging: bool = False                # features are being written to CSV
-    show_legend: bool = False            # timing legend instead of the face mesh
-    face_points: Optional[np.ndarray] = None   # landmarks in camera pixels
-    yaw: float = 0.0                     # head turn, + = towards screen right
-    pitch: float = 0.0                   # head nod, + = looking down
-    yaw_ref: float = 0.0                 # calibrated pose the gate compares with
-    pitch_ref: float = 0.0
-    max_yaw: float = 20.0                # gate limits around the calibrated pose
-    max_pitch: float = 12.0
+    show_debug: bool = False             # gesture checks instead of the chart
+    logging: bool = False                # measurements are being written to CSV
+    show_legend: bool = False            # timing legend instead of the hand
 
     @property
-    def calibrating(self) -> bool:
-        return self.signal is not None and self.signal.calibrating
+    def measure(self):
+        g = self.gesture
+        return g.measure if (self.hand and g is not None) else None
 
     @property
     def level(self) -> float:
-        return self.signal.score if (self.face and self.signal is not None) else 0.0
+        """Press score of the current frame, 0.5 = loop angle."""
+        g = self.gesture
+        return g.score if (self.hand and g is not None and g.armed) else 0.0
 
 
 @dataclass
@@ -147,19 +149,15 @@ class Hud:
         margin = 16
         self.rect_title = pygame.Rect(margin, margin, 248, 60)
         self.rect_legend = pygame.Rect(margin, 88, 248, 132)
-        self.rect_face = pygame.Rect(margin, 88, 248, 232)
-        self.rect_meters = pygame.Rect(margin, self.rect_face.bottom + 12, 248, 80)
-        self.face_view = FaceMeshView()
+        self.rect_hand = pygame.Rect(margin, 88, 248, 232)
+        self.rect_meters = pygame.Rect(margin, self.rect_hand.bottom + 12, 248, 80)
         self.rect_fps = pygame.Rect(w - margin - 100, margin, 100, 32)
         self.rect_chart = pygame.Rect(w - margin - 212, 60, 212, 362)
         self.rect_bottom = pygame.Rect(margin, h - margin - 150, w - 2 * margin, 150)
         self.rect_error = pygame.Rect(0, 0, 320, 96)
         self.rect_error.center = (w // 2, h // 2 - 40)
-        mid = (self.rect_legend.right + self.rect_chart.left) // 2
-        self.rect_calib = pygame.Rect(0, 0, 280, 84)
-        self.rect_calib.midtop = (mid, margin)
 
-        # Letters pop up high between the side panels, clear of the face.
+        # Letters pop up high between the side panels.
         self.pop_center = ((self.rect_legend.right + self.rect_chart.left) / 2, 140)
 
         # Animation state
@@ -183,7 +181,6 @@ class Hud:
         self._flash["letter"] = now
         self._bottom_flash = (now, ACTION_COLORS["letter"])
 
-
     def on_space(self, now: float) -> None:
         self._pops.append(("space", ACTION_COLORS["word"], now, 40))
         self._flash["word"] = now
@@ -197,13 +194,12 @@ class Hud:
         self._pops.append(("cleared", DANGER, now, 40))
         self._bottom_flash = (now, DANGER)
 
-    def on_calibrated(self, label: str, now: float) -> None:
-        color = SUCCESS if label == "good" else WARNING
-        self._pops.append((f"ready, {label}", color, now, 40))
-        self._bottom_flash = (now, color)
-
-    def on_recentred(self, now: float) -> None:
-        self._pops.append(("face re-centred", WARNING, now, 32))
+    def on_armed(self, armed: bool, now: float) -> None:
+        if armed:
+            self._pops.append(("recording", SUCCESS, now, 32))
+            self._bottom_flash = (now, SUCCESS)
+        else:
+            self._pops.append(("stopped", TEXT_MUTED, now, 32))
 
     # ------------------------------------------------------------------------
     # Frame
@@ -220,47 +216,43 @@ class Hud:
             self.blit(label, (self.size[0] - 16, 16), "topright")
             return
         self._build_panels(state, now)
+        self._draw_touch_point(state)
         self._draw_chip(state)
 
         self._draw_title(state)
         if state.show_legend:
             self._draw_legend(state, now)
         else:
-            self._draw_face(state)
+            self._draw_hand(state)
         self._draw_meters(state)
         self._draw_fps(state)
         if state.show_debug:
             self._draw_debug(state)
         elif state.show_chart:
             self._draw_chart(state)
-        if state.calibrating:
-            self._draw_calibration(state)
         self._draw_bottom(state, now)
         if state.camera_error:
             self._draw_camera_error(state)
         self._draw_pops(now)
 
     def _build_panels(self, state: HudState, now: float) -> None:
-        top = self.rect_legend if state.show_legend else self.rect_face
+        top = self.rect_legend if state.show_legend else self.rect_hand
         self.rect_meters.y = top.bottom + 12
         flash_t, flash_color = self._bottom_flash
         flash = max(0.0, 1.0 - (now - flash_t) / 0.6)
         self.panels = [
             Panel(self.rect_title),
-            Panel(self.rect_legend if state.show_legend else self.rect_face),
+            Panel(top, 0.5 if state.armed else 0.0, SUCCESS),
             Panel(self.rect_meters),
             Panel(self.rect_fps),
             Panel(self.rect_bottom, flash, flash_color),
         ]
         if state.show_chart or state.show_debug:
             self.panels.append(Panel(self.rect_chart))
-        if state.calibrating:
-            color = PROMPT_COLORS.get(state.signal.step, ACCENT)
-            self.panels.append(Panel(self.rect_calib, 0.8, color))
         if state.camera_error:
             self.panels.append(Panel(self.rect_error, 0.6, DANGER))
-        # Glass readout next to the mouth; the border lights up during a
-        # smile, in the colour of the symbol it is about to type.
+        # Glass readout next to the fingertips; the border lights up during
+        # a loop, in the colour of the symbol it is about to type.
         rect = self._chip_rect(state)
         if rect is not None:
             self.panels.append(Panel(rect, 0.9 if state.pressed else 0.0,
@@ -269,15 +261,23 @@ class Hud:
     @staticmethod
     def _press_color(state: HudState) -> tuple:
         """
-        Colour of a smile in progress: what it will type if the face relaxes
-        now (dot, then dash once it is long enough).
+        Colour of a loop in progress: what it will type if the fingers
+        straighten now (dot, then dash once it is long enough).
         """
         if state.pressed:
             return ACTION_COLORS["dash" if state.pressed_time >= state.dash_after else "dot"]
         return ACTION_COLORS["dot"]
 
+    def _finger_color(self, state: HudState) -> tuple:
+        """Colour of the two typing fingers in the skeleton."""
+        if state.pressed:
+            return self._press_color(state)
+        if state.armed:
+            return SUCCESS
+        return TEXT_MUTED
+
     def _chip_rect(self, state: HudState):
-        if not state.face or state.chip is None:
+        if not state.hand or state.chip is None:
             return None
         rect = pygame.Rect((0, 0), CHIP_SIZE)
         rect.center = (round(state.chip[0]), round(state.chip[1]))
@@ -325,47 +325,44 @@ class Hud:
     # ------------------------------------------------------------------------
 
     def _draw_chip(self, state: HudState) -> None:
-        """Smile as a percentage of a typical smile, beside the mouth."""
+        """Curl of the two fingers, beside the fingertips."""
         rect = self._chip_rect(state)
         if rect is None:
             return
         color = self._press_color(state)
         dot = (rect.x + 13, rect.centery)
-        draw.circle(self.ui, color if state.pressed else TEXT_MUTED, dot, 3.5)
+        dot_color = color if state.pressed else (SUCCESS if state.armed else TEXT_FAINT)
+        draw.circle(self.ui, dot_color, dot, 3.5)
         if state.pressed:
             draw.glow(self.glow, color, dot, 14, 0.8)
-        if state.calibrating:
-            text, text_color = "cal", TEXT_MUTED
-        elif state.signal is not None and state.signal.gated:
+        m = state.measure
+        if not state.armed or m is None:
             text, text_color = "off", TEXT_FAINT
         else:
-            text = f"{min(999, round(state.level * 100)):3d}%"
+            text = f"{min(999, round(m.curl)):3d}°"
             text_color = color if state.pressed else TEXT
         self.blit(self.text("mono", 13, text, text_color),
                   (rect.right - 10, rect.centery), "midright")
 
     def _draw_title(self, state: HudState) -> None:
         r = self.rect_title
-        self.blit(self.text("semibold", 17, "Smile Morse", TEXT), (r.x + 16, r.y + 10))
+        self.blit(self.text("semibold", 17, "Hand Morse", TEXT), (r.x + 16, r.y + 10))
         if state.logging:
             draw.circle(self.ui, DANGER, (r.right - 46, r.y + 21), 3.5)
             draw.glow(self.glow, DANGER, (r.right - 46, r.y + 21), 10, 0.6)
             self.blit(self.text("semibold", 11, "REC", DANGER),
                       (r.right - 16, r.y + 21), "midright")
 
-        gated = state.signal.gated if (state.face and state.signal is not None) else None
         if state.camera_error:
             dot, msg = DANGER, "Camera unavailable"
-        elif not state.face:
-            dot, msg = TEXT_FAINT, "Look at the camera"
-        elif state.calibrating:
-            dot, msg = ACCENT, "Calibrating, follow the prompt"
+        elif not state.hand:
+            dot, msg = TEXT_FAINT, "Show your hand to the camera"
         elif state.paused:
             dot, msg = WARNING, "Paused, press P to listen"
-        elif gated:
-            dot, msg = WARNING, {"head": "Face the camera"}.get(gated, "Input ignored")
+        elif state.armed:
+            dot, msg = SUCCESS, "Recording"
         else:
-            dot, msg = SUCCESS, "Listening"
+            dot, msg = WARNING, "Hold index + middle together"
 
         cy = r.y + 43
         draw.circle(self.ui, dot, (r.x + 20, cy), 3.5)
@@ -377,55 +374,100 @@ class Hud:
         def sec(v):
             return f"{round(v, 2):g} s"
         return [
-            ("dot", "Short smile", f"< {sec(state.dash_after)}  \u00b7"),
-            ("dash", "Long smile", f"\u2265 {sec(state.dash_after)}  \u2013"),
-            ("letter", f"Relax {sec(state.letter_gap)}", "end letter"),
-            ("word", f"Relax {sec(state.word_gap)}", "space"),
+            ("dot", "Short loop", f"< {sec(state.dash_after)}  ·"),
+            ("dash", "Long loop", f"≥ {sec(state.dash_after)}  –"),
+            ("letter", f"Straight {sec(state.letter_gap)}", "end letter"),
+            ("word", f"Straight {sec(state.word_gap)}", "space"),
         ]
 
-    def _draw_face(self, state: HudState) -> None:
+    def _draw_hand(self, state: HudState) -> None:
         """
-        The tracked face redrawn as a mesh on the left, head angles on the
-        right. Debug view: shows how steady the landmarks really are.
+        The tracked hand redrawn as a skeleton on the left, the two numbers
+        the gesture depends on at the right. Debug view.
         """
-        r = self.rect_face
-        self.blit(self.label("Face mesh"), (r.x + 16, r.y + 12))
+        r = self.rect_hand
+        self.blit(self.label("Hand"), (r.x + 16, r.y + 12))
         area = pygame.Rect(r.x + 8, r.y + 28, 136, r.h - 36)
-        pts = state.face_points if state.face else None
+        pts = state.hand_points if state.hand else None
         if pts is None:
-            self.blit(self.text("regular", 12, "No face", TEXT_FAINT), area.center, "center")
+            self.blit(self.text("regular", 12, "No hand", TEXT_FAINT), area.center, "center")
         else:
-            color = self._press_color(state) if state.pressed else ACCENT
-            fill = 0.15 + 0.55 * min(1.0, state.level)
-            surf = self.face_view.render(pts, area.size, color, fill)
-            self.ui.blit(surf, area.topleft)
-            if state.pressed:
-                for cx, cy in self.face_view.highlight_centres:
-                    draw.glow(self.glow, color, (area.x + cx, area.y + cy), 12, 0.7)
+            self._draw_skeleton(state, pts, area)
 
+        g = state.gesture if state.hand else None
+        m = state.measure
         x = r.x + 150
+        state_name = g.state if g is not None else "none"
+        if state.armed and state_name == "off":
+            state_name = "ready"            # inside the short grace period
+        state_color = {"ready": SUCCESS, "loop": self._press_color(state),
+                       "off": WARNING}.get(state_name, TEXT_FAINT)
+        if state_name in ("ready", "loop") and not state.armed:
+            state_color = WARNING           # pose seen, recording not on yet
+        self.blit(self.label("State"), (x, r.y + 36))
+        self.blit(self.text("semibold", 18, STATE_TEXT[state_name], state_color), (x, r.y + 50))
+        rec = "recording" if state.armed else "not recording"
+        self.blit(self.text("regular", 11, rec, SUCCESS if state.armed else TEXT_FAINT),
+                  (x, r.y + 74))
+
         rows = (
-            ("Yaw", state.yaw, state.yaw_ref, state.max_yaw, ("left", "right")),
-            ("Pitch", state.pitch, state.pitch_ref, state.max_pitch, ("up", "down")),
+            ("Curl", None if m is None else f"{m.curl:.0f}°",
+             f"loop ≥ {state.loop_angle:.0f}°",
+             m is not None and m.curl >= state.loop_angle),
+            ("Tip gap", None if m is None else f"{m.tip_gap:.2f}",
+             f"together < {GestureDetector.TOGETHER:.2f}",
+             m is not None and m.tip_gap < GestureDetector.TOGETHER),
         )
-        for i, (name, value, ref, limit, words) in enumerate(rows):
-            y = r.y + 36 + i * 92
+        for i, (name, value, rule, hit) in enumerate(rows):
+            y = r.y + 104 + i * 62
             self.blit(self.label(name), (x, y))
-            self.blit(self.text("regular", 10, f"\u00b1{limit:.0f}\u00b0", TEXT_MUTED),
-                      (r.right - 12, y), "topright")
-            if pts is None:
-                self.blit(self.text("semibold", 20, "-", TEXT_FAINT), (x, y + 14))
+            if value is None:
+                self.blit(self.text("semibold", 18, "-", TEXT_FAINT), (x, y + 14))
                 continue
-            calibrated = state.calibration is not None
-            delta = value - ref
-            over = calibrated and abs(delta) > limit
-            color = WARNING if over else TEXT
-            self.blit(self.text("semibold", 20, f"{abs(value):.1f}\u00b0", color), (x, y + 14))
-            direction = words[1] if value > 0.5 else words[0] if value < -0.5 else "centre"
-            self.blit(self.text("regular", 12, direction, TEXT_MUTED), (x, y + 42))
-            note = f"\u0394 calib {delta:+.1f}\u00b0" if calibrated else "not calibrated"
-            self.blit(self.text("regular", 11, note, WARNING if over else TEXT_FAINT),
-                      (x, y + 60))
+            self.blit(self.text("semibold", 18, value, ACCENT if hit else TEXT), (x, y + 14))
+            self.blit(self.text("regular", 11, rule, TEXT_FAINT), (x, y + 38))
+
+    def _draw_touch_point(self, state: HudState) -> None:
+        """
+        One glowing point on the camera image where the index and middle
+        fingertips touch. Nothing else is drawn on the hand. The point is
+        skipped while it sits under a glass panel, so it never covers text.
+        """
+        q = state.hand_screen if state.hand else None
+        g = state.gesture
+        if q is None or g is None or not g.checks.get("tips together"):
+            return
+        centre = (q[8] + q[12]) / 2.0
+        if any(panel.rect.collidepoint(centre[0], centre[1]) for panel in self.panels):
+            return
+        color = self._finger_color(state)
+        if not state.armed:
+            color = TOUCH_IDLE
+        strength = 1.0 if state.pressed else 0.6
+        draw.glow(self.glow, color, centre, 22 if state.pressed else 16, strength)
+        draw.circle(self.ui, draw.with_alpha(color, 0.95), centre, 5 if state.pressed else 4)
+
+    def _draw_skeleton(self, state: HudState, pts: np.ndarray, area: pygame.Rect) -> None:
+        pad = 10
+        lo, hi = pts.min(axis=0), pts.max(axis=0)
+        span = np.maximum(hi - lo, 1.0)
+        scale = min((area.w - 2 * pad) / span[0], (area.h - 2 * pad) / span[1])
+        centre = np.array(area.center, dtype=np.float64)
+        q = (pts - (lo + hi) / 2.0) * scale + centre
+
+        finger = self._finger_color(state)
+        for a, b in HAND_BONES:
+            if (a, b) in ACTIVE_BONES:
+                continue
+            draw.line(self.ui, BONE_COLOR, q[a], q[b], 2)
+        for a, b in ACTIVE_BONES:
+            draw.line(self.ui, finger, q[a], q[b], 4)
+        for i, p in enumerate(q):
+            active = i in (5, 6, 7, 8, 9, 10, 11, 12)
+            draw.circle(self.ui, finger if active else (236, 240, 248), p, 3 if active else 2)
+        if state.pressed:
+            tip = (q[8] + q[12]) / 2.0
+            draw.glow(self.glow, finger, tip, 16, 0.8)
 
     def _draw_legend(self, state: HudState, now: float) -> None:
         r = self.rect_legend
@@ -450,13 +492,14 @@ class Hud:
                       (r.right - 14, cy), "midright")
 
     def _draw_meters(self, state: HudState) -> None:
-        """Smile bar with the threshold marked, and the calibration status."""
+        """Curl bar with the loop angle marked, and whether recording is on."""
         r = self.rect_meters
-        self.blit(self.label("Smile"), (r.x + 16, r.y + 12))
+        self.blit(self.label("Finger curl"), (r.x + 16, r.y + 12))
         x0, x1 = r.x + 16, r.right - 62
         cy = r.y + 40
-        value = state.level
-        color = self._press_color(state)
+        m = state.measure
+        value = GestureDetector(state.loop_angle).score_for(m.curl) if m is not None else 0.0
+        color = self._press_color(state) if state.armed else TEXT_FAINT
 
         track = pygame.Rect(x0, cy - 3, x1 - x0, 6)
         draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 3)
@@ -465,93 +508,66 @@ class Hud:
         draw.rounded_rect(self.ui, draw.with_alpha(color, 0.75), fill, 3)
         if state.pressed:
             draw.glow(self.glow, color, (fill.right - 4, cy), 16, 0.7)
-        tx = x0 + track.w * min(1.0, state.threshold / SCORE_MAX)
+        # White tick: the loop angle. Faint tick: below it the fingers count
+        # as straight again.
+        tx = x0 + track.w * 0.5 / SCORE_MAX
         draw.line(self.ui, (255, 255, 255, 190), (tx, cy - 7), (tx, cy + 7), 1)
-        # A faint tick where an average calibration smile lands.
-        ax = x0 + track.w / SCORE_MAX
-        draw.line(self.ui, (255, 255, 255, 70), (ax, cy - 5), (ax, cy + 5), 1)
+        rx = x0 + track.w * GestureDetector.READY_SCORE / SCORE_MAX
+        draw.line(self.ui, (255, 255, 255, 70), (rx, cy - 5), (rx, cy + 5), 1)
 
-        if not state.face:
-            status = "-"
-        elif state.calibrating:
-            status = "cal"
-        else:
-            status = f"{round(value * 100)}%"
+        status = "-" if m is None else f"{m.curl:.0f}°"
         self.blit(self.text("regular", 11, status, color if state.pressed else TEXT_MUTED),
                   (r.right - 14, cy), "midright")
 
-        cal = state.calibration
-        label = quality_label(cal)
-        if cal is None:
-            line, line_color = "Not calibrated yet", TEXT_FAINT
-        elif cal.fallback:
-            line, line_color = "Calibration: default weights, press C", WARNING
+        if state.armed:
+            line, line_color = "Recording on", SUCCESS
+        elif state.hand:
+            line, line_color = "Off: index + middle straight, together", WARNING
         else:
-            line_color = SUCCESS if label == "good" else WARNING
-            line = f"Calibration: {label}, d\u2032 {cal.quality:.1f}"
+            line, line_color = "Off: no hand", TEXT_FAINT
         self.blit(self.text("regular", 11, line, line_color), (r.x + 16, r.y + 62), "midleft")
 
-    def _draw_calibration(self, state: HudState) -> None:
-        """Big prompt telling the user to relax or smile, with a progress bar."""
-        r = self.rect_calib
-        n = state.signal
-        step = n.step or "relax"
-        color = PROMPT_COLORS.get(step, ACCENT)
-        title = "Smile, lips closed" if step == "smile" else "Relax your face"
-        self.blit(self.text("semibold", 20, title, color), (r.centerx, r.y + 28), "center")
-        draw.glow(self.glow, color, (r.centerx, r.y + 28), 40, 0.25)
-        sub = f"Calibration {n.step_index + 1} / {n.step_count}  \u00b7  keep your head still"
-        self.blit(self.text("regular", 11, sub, TEXT_MUTED), (r.centerx, r.y + 52), "center")
-        track = pygame.Rect(r.x + 20, r.y + 66, r.w - 40, 5)
-        draw.rounded_rect(self.ui, (255, 255, 255, 30), track, 2)
-        fill = track.copy()
-        fill.w = max(5, round(track.w * n.step_progress))
-        draw.rounded_rect(self.ui, draw.with_alpha(color, 0.85), fill, 2)
-
     def _draw_debug(self, state: HudState) -> None:
-        """Each feature's weight, current z-score and share of the score (F key)."""
+        """Every gesture rule with its measured value (F key)."""
         r = self.rect_chart
         x0 = r.x + 14
-        self.blit(self.label("Features"), (x0, r.y + 14))
-        self.blit(self.text("regular", 11, "share   now z", TEXT_FAINT),
-                  (r.right - 14, r.y + 12), "topright")
-        cal = state.calibration
-        sig = state.signal
-        for i, name in enumerate(FEATURES):
-            cy = r.y + 50 + i * 40
-            w = cal.weights[i] if cal is not None else 0.0
-            # Share of an average calibration smile that this feature
-            # provides (the shares add up to 100 %).
-            share = w * cal.effect[i] * 100 if cal is not None else 0.0
-            live = sig is not None and state.face and len(sig.z) == len(FEATURES)
-            z = sig.z[i] if live else 0.0
-            part = sig.contributions[i] if live else 0.0
-            dim = abs(w) < 1e-4
-            self.blit(self.text("medium", 13, name, TEXT_FAINT if dim else TEXT),
-                      (x0, cy), "midleft")
-            self.blit(self.text("mono", 11, f"{share:4.0f}% {z:6.1f}",
-                                TEXT_FAINT if dim else TEXT_MUTED),
-                      (r.right - 14, cy), "midright")
-            # Contribution to the score: centre line = 0, full half = 1.0.
-            bar = pygame.Rect(x0, cy + 12, r.w - 28, 4)
-            draw.rounded_rect(self.ui, (255, 255, 255, 22), bar, 2)
-            half = bar.w / 2
-            length = max(-1.0, min(1.0, part)) * half
-            seg = pygame.Rect(0, bar.y, max(2, round(abs(length))), 4)
-            if length >= 0:
-                seg.x = round(bar.x + half)
+        self.blit(self.label("Gesture checks"), (x0, r.y + 14))
+        m = state.measure
+        g = state.gesture if state.hand else None
+        checks = g.checks if g is not None else {}
+        det = GestureDetector
+        rows = [
+            ("index up", "reach", None if m is None else m.reach["index"], f"> {det.RAISED:.2f}"),
+            ("middle up", "reach", None if m is None else m.reach["middle"], f"> {det.RAISED:.2f}"),
+            ("ring folded", "reach", None if m is None else m.reach["ring"], f"< {det.FOLDED:.2f}"),
+            ("pinky folded", "reach", None if m is None else m.reach["pinky"], f"< {det.FOLDED:.2f}"),
+            ("tips together", "gap", None if m is None else m.tip_gap, f"< {det.TOGETHER:.2f}"),
+        ]
+        for i, (name, kind, value, rule) in enumerate(rows):
+            cy = r.y + 48 + i * 36
+            if name not in checks and name in ("ring folded", "pinky folded") \
+                    and not state.need_folded:
+                color, mark = TEXT_FAINT, "off"
+            elif value is None:
+                color, mark = TEXT_FAINT, "-"
+            elif checks.get(name):
+                color, mark = SUCCESS, "ok"
             else:
-                seg.right = round(bar.x + half)
-            col = ACTION_COLORS["dot"] if length >= 0 else DANGER
-            draw.rounded_rect(self.ui, draw.with_alpha(col, 0.85), seg, 2)
+                color, mark = WARNING, "no"
+            self.blit(self.text("medium", 13, name, TEXT if value is not None else TEXT_FAINT),
+                      (x0, cy), "midleft")
+            self.blit(self.text("semibold", 11, mark, color), (r.right - 14, cy), "midright")
+            detail = f"{kind} {value:.2f}  (needs {rule})" if value is not None else f"needs {rule}"
+            self.blit(self.text("regular", 11, detail, TEXT_MUTED), (x0, cy + 15), "midleft")
 
-        y = r.y + 50 + len(FEATURES) * 40
-        raw = sig.raw if (sig is not None and state.face) else 0.0
-        self.blit(self.text("regular", 12, f"sum {raw:+.2f}   smoothed {state.level:.2f}",
-                            TEXT_MUTED), (x0, y), "midleft")
-        quality = "-" if cal is None else f"{cal.quality:.1f}"
-        self.blit(self.text("regular", 12, f"d\u2032 {quality}  \u00b7  F to close",
-                            TEXT_FAINT), (x0, y + 22), "midleft")
+        y = r.y + 48 + len(rows) * 36
+        if m is not None:
+            parts = (f"curl {m.curl:.0f}° = index {m.bend['index']:.0f}°"
+                     f" + middle {m.bend['middle']:.0f}°")
+            self.blit(self.text("regular", 11, parts, TEXT_MUTED), (x0, y), "midleft")
+            self.blit(self.text("regular", 11, f"middle-joint gap {m.pip_gap:.2f}",
+                                TEXT_MUTED), (x0, y + 18), "midleft")
+        self.blit(self.text("regular", 11, "F to close", TEXT_FAINT), (x0, y + 40), "midleft")
 
     def _draw_fps(self, state: HudState) -> None:
         r = self.rect_fps
@@ -649,7 +665,7 @@ class Hud:
         if state.code or flaring:
             end = self._draw_code(state.code, x0 + shake, cy, now)
             if flaring:
-                self._draw_live_smile(state, end, cy)
+                self._draw_live_loop(state, end, cy)
             if state.code:
                 self._draw_prediction(state, r.right - 20, cy)
         elif state.pause_kind == "space":
@@ -664,13 +680,13 @@ class Hud:
         elif state.paused:
             self.blit(self.text("medium", 14, "Paused. Press P to start listening again",
                                 WARNING), (x0, cy), "midleft")
-        elif state.calibrating:
+        elif not state.armed:
             self.blit(self.text("regular", 14,
-                                "Calibrating: follow the prompt at the top of the screen",
+                                "Hold index + middle straight and together to start recording",
                                 TEXT_FAINT), (x0, cy), "midleft")
         else:
             self.blit(self.text("regular", 14,
-                                "Short smile for a dot, long smile for a dash",
+                                "Short loop for a dot, long loop for a dash",
                                 TEXT_FAINT), (x0 + shake, cy), "midleft")
 
         # Divider
@@ -726,7 +742,7 @@ class Hud:
                 draw.glow(self.glow, color, (cx, cy), 24, 0.55 * grow)
                 draw.capsule(self.ui, color, (cx, cy), 34 * grow, 13 * grow)
 
-            # A quick ripple on the newest symbol confirms the smile landed.
+            # A quick ripple on the newest symbol confirms the loop landed.
             if is_last and t < 0.35:
                 k = t / 0.35
                 draw.ring(self.ui, draw.with_alpha(color, 1.0 - k), (cx, cy),
@@ -735,10 +751,10 @@ class Hud:
             x += width
         return x
 
-    def _draw_live_smile(self, state: HudState, x: float, cy: float) -> None:
+    def _draw_live_loop(self, state: HudState, x: float, cy: float) -> None:
         """
-        While smiling, show the symbol the smile will produce: a dot
-        outline that stretches into a dash as the smile gets longer.
+        During a loop, show the symbol it will produce: a dot outline that
+        stretches into a dash as the loop gets longer.
         Once the dash has been typed it appears as a real symbol instead.
         """
         if state.pressed_time >= state.dash_after:
@@ -774,7 +790,7 @@ class Hud:
 
         left = right - 56
         if char is not None:
-            self.blit(self.text("regular", 12, "relax your face to confirm", TEXT_MUTED),
+            self.blit(self.text("regular", 12, "straighten to confirm", TEXT_MUTED),
                       (left, cy), "midright")
         elif options:
             preview = "  ".join(options[:6]) + ("  \u2026" if len(options) > 6 else "")
@@ -783,7 +799,7 @@ class Hud:
             self.blit(self.text("medium", 13, "no match", DANGER), (left, cy), "midright")
 
     def _draw_key_hints(self, right: float, cy: float, state: HudState) -> None:
-        hints = [("C", "calibrate"), ("X", "settings"), ("Z", "hide UI"),
+        hints = [("G", "legend"), ("X", "settings"), ("Z", "hide UI"),
                  ("P", "resume" if state.paused else "pause"),
                  ("H", "chart"), ("M", "sound off" if state.muted else "sound")]
         x = right

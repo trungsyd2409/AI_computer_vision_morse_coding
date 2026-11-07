@@ -37,12 +37,17 @@ FACE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/latest/face_landmarker.task"
 )
+HAND_MODEL_PATH = MODELS_DIR / "hand_landmarker.task"
+HAND_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+    "hand_landmarker/float16/latest/hand_landmarker.task"
+)
 
 # ---------------------------------------------------------------------------
 # Window
 # ---------------------------------------------------------------------------
 
-APP_TITLE = "Smile Morse"
+APP_TITLE = "Hand Morse"
 WINDOW_SIZE = (800, 600)          # 4:3, matches the native ratio of most webcams
 SETTINGS_TITLE = "Settings"
 SETTINGS_SIZE = (400, 600)
@@ -62,8 +67,8 @@ DANGER = (251, 113, 133)
 # One colour per action so the legend, the meters, the typed symbols and
 # the pause countdown all speak the same visual language.
 ACTION_COLORS = {
-    "dot": (103, 232, 249),       # short smile
-    "dash": (167, 139, 250),      # long smile
+    "dot": (103, 232, 249),       # short loop
+    "dash": (167, 139, 250),      # long loop
     "letter": (251, 191, 36),     # short pause -> end of letter
     "word": (74, 222, 128),       # long pause  -> space
 }
@@ -97,16 +102,20 @@ class CameraSettings:
 
 
 @dataclass
-class SmileSettings:
-    """Threshold and timing for reading smiles."""
+class HandSettings:
+    """Gesture thresholds and timing for the index + middle finger input."""
 
-    # The smile score is 0 with a relaxed face and 1 for an average smile
-    # from calibration. Above `threshold` the smile counts as pressed.
-    threshold: float = 0.50
+    # Curl (bend of index + middle, in degrees) at which the two fingers
+    # count as a loop, i.e. the Morse key is pressed. On the reference
+    # photos the straight pose measured 66 to 74 and the loop 95 to 99.
+    loop_angle: float = 85.0
     # The Morse time unit t, in seconds. Everything is derived from it:
-    # smile < 1.5 t = dot, >= 1.5 t = dash, relaxed 3 t = end of letter,
-    # relaxed 7 t = end of word.
+    # loop < 1.5 t = dot, >= 1.5 t = dash, straight 3 t = end of letter,
+    # straight 7 t = end of word.
     time_unit: float = 0.25
+    # Ring and pinky must be folded for the pose to count. Turning this
+    # off accepts an open hand with index and middle together.
+    need_folded: bool = True
 
     @property
     def dash_after(self) -> float:
@@ -124,7 +133,7 @@ class SmileSettings:
 @dataclass
 class AppSettings:
     camera: CameraSettings = field(default_factory=CameraSettings)
-    smile: SmileSettings = field(default_factory=SmileSettings)
+    hand: HandSettings = field(default_factory=HandSettings)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -140,7 +149,7 @@ class AppSettings:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             return settings
-        for name in ("camera", "smile"):
+        for name in ("camera", "hand"):
             section = getattr(settings, name)
             saved = data.get(name, {})
             for f in fields(section):
